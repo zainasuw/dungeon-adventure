@@ -53,8 +53,8 @@ interface Torch {
   flame: THREE.Vector3;
   seed: number;
   scale: number;
-  /** Candles have no light of their own; the bloom sells them. */
-  light: THREE.PointLight | null;
+  /** Candles give no light of their own; the bloom sells them. */
+  light: boolean;
   emberTimer: number;
   on?: boolean;
 }
@@ -89,14 +89,22 @@ export class Torches {
   }
 
   add(flame: THREE.Vector3): void {
-    const light = new THREE.PointLight('#ff8a3c', this.baseIntensity, 13, 2);
-    light.position.copy(flame).add(new THREE.Vector3(0, 0.35, 0));
-    this.parent.add(light);
-    this.torches.push({ flame: flame.clone(), seed: Math.random() * 100, scale: 1, light, emberTimer: Math.random() });
+    this.torches.push({ flame: flame.clone(), seed: Math.random() * 100, scale: 1, light: true, emberTimer: Math.random() });
   }
 
+  /**
+   * Only the torches nearest the hero get a real light; the rest still show
+   * their flames. Every light costs time on every pixel, and with 20+ torches
+   * the game slowed down. The number of lights never changes, so the GPU never
+   * has to rebuild its shaders mid-game.
+   */
+  private static readonly POOL = 6;
+  private readonly pool: THREE.PointLight[] = [];
+  private readonly ranked: { t: Torch; d: number }[] = [];
+  private readonly focus = new THREE.Vector3();
+
   addCandle(flame: THREE.Vector3): void {
-    this.torches.push({ flame: flame.clone(), seed: Math.random() * 100, scale: 0.3, light: null, emberTimer: Infinity });
+    this.torches.push({ flame: flame.clone(), seed: Math.random() * 100, scale: 0.3, light: false, emberTimer: Infinity });
   }
 
   /** Builds the flame billboards. Call after adding every torch. */
@@ -116,37 +124,66 @@ export class Torches {
     this.mesh.frustumCulled = false;
     this.mesh.renderOrder = 3;
     this.parent.add(this.mesh);
+    const lights = Math.min(Torches.POOL, this.torches.filter((t) => t.light).length);
+    for (let i = 0; i < lights; i++) {
+      const l = new THREE.PointLight('#ff8a3c', 0, 13, 2);
+      this.pool.push(l);
+      this.parent.add(l);
+    }
   }
 
   applyMood(mood: Mood): void {
     this.baseIntensity = mood.torch.intensity;
-    for (const t of this.torches) {
-      if (!t.light) continue;
-      t.light.color.set(mood.torch.color);
-      t.light.distance = mood.torch.distance;
+    for (const l of this.pool) {
+      l.color.set(mood.torch.color);
+      l.distance = mood.torch.distance;
     }
+  }
+
+  private assignLights(time: number, focus?: THREE.Vector3): void {
+    if (!this.pool.length) return;
+    if (focus) this.focus.copy(focus);
+    const ranked = this.ranked;
+    ranked.length = 0;
+    for (const t of this.torches) {
+      if (t.light && t.on !== false) ranked.push({ t, d: t.flame.distanceTo(this.focus) });
+    }
+    ranked.sort((a, b) => a.d - b.d);
+    // The first torch left out sets the fade line: a torch about to swap
+    // with it is already dim, so lights never pop on or off.
+    const edge = ranked.length > this.pool.length ? ranked[this.pool.length].d : Infinity;
+    this.pool.forEach((l, i) => {
+      const r = ranked[i];
+      if (!r) {
+        l.intensity = 0;
+        return;
+      }
+      const t = r.t;
+      const fade = Math.min(1, (edge - r.d) / 3);
+      const flicker = 0.82 + 0.12 * noise1(time * 7 + t.seed) + 0.06 * noise1(time * 19 + t.seed * 3);
+      l.intensity = this.baseIntensity * flicker * fade;
+      l.position.set(
+        t.flame.x + noise1(time * 3 + t.seed) * 0.06,
+        t.flame.y + 0.35 + noise1(time * 4 + t.seed * 2) * 0.05,
+        t.flame.z + noise1(time * 3.4 + t.seed * 5) * 0.06,
+      );
+    });
   }
 
   /** 0 = every torch out (dark hall), 1 = all lit. Torches light one by one as it rises. */
   lit = 1;
 
-  update(time: number, dt: number): void {
+  /** `focus` is where the hero is; the nearest torches there get the real lights. */
+  update(time: number, dt: number, focus?: THREE.Vector3): void {
     this.material.uniforms.uTime.value = time;
     this.material.uniforms.uLit.value = this.lit;
     const n = this.torches.length;
     this.torches.forEach((t, i) => {
       t.on = this.lit >= 1 || i / n < this.lit;
     });
+    this.assignLights(time, focus);
     for (const t of this.torches) {
-      if (!t.light) continue;
-      const flicker = 0.82 + 0.12 * noise1(time * 7 + t.seed) + 0.06 * noise1(time * 19 + t.seed * 3);
-      t.light.intensity = t.on === false ? 0 : this.baseIntensity * flicker;
-      if (t.on === false) continue;
-      t.light.position.set(
-        t.flame.x + noise1(time * 3 + t.seed) * 0.06,
-        t.flame.y + 0.35 + noise1(time * 4 + t.seed * 2) * 0.05,
-        t.flame.z + noise1(time * 3.4 + t.seed * 5) * 0.06,
-      );
+      if (!t.light || t.on === false) continue;
       t.emberTimer -= dt;
       if (t.emberTimer <= 0) {
         t.emberTimer = 0.08 + Math.random() * 0.25;

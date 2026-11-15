@@ -717,6 +717,9 @@ export class Ui {
   private setScreen(name: string, html: string): void {
     this.screen.onpointerdown = this.screen.onpointermove = this.screen.onpointerup = this.screen.onpointercancel = null;
     this.screen.dataset.screen = name;
+    // A menu or end card never shares the screen with a hall banner.
+    window.clearTimeout(this.bannerTimer);
+    this.bannerEl.classList.remove('banner--show');
     this.screen.className = `screen-layer screen-layer--on screen--${name}`;
     this.screen.innerHTML = html;
   }

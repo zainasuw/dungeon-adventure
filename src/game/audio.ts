@@ -14,6 +14,7 @@ export type Sfx =
   | 'pickup'
   | 'pillar'
   | 'rise'
+  | 'summon'
   | 'door'
   | 'clear'
   | 'victory'
@@ -184,8 +185,14 @@ export class Audio {
         return this.arp(now, [784, 988, 1319], 0.07, 0.14);
       case 'pillar':
         return this.arp(now, [523, 659, 784, 1047, 1319], 0.09, 0.16, 0.6);
+      case 'summon':
+        // A soft magic swell while the summoning circle glows.
+        this.tone(now, [220, 440], 0.85, 'sine', 0.05);
+        return this.whoosh(now, 0.8, 400, 1800, 0.06);
       case 'rise':
-        return this.tone(now, [70, 140], 0.9, 'sawtooth', 0.09);
+        // The monster pops out: a low thump and a puff.
+        this.thud(now, 80, 0.22, 0.4);
+        return this.whoosh(now, 0.25, 1600, 500, 0.12);
       case 'door':
         this.tone(now, [60, 48], 1.4, 'sawtooth', 0.1);
         return this.arp(now + 0.4, [392, 523, 659], 0.12, 0.1, 0.8);

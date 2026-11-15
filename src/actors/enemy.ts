@@ -200,23 +200,39 @@ export class Enemy extends Character {
     return this.alive && this.state !== 'dormant' && this.state !== 'rising';
   }
 
-  /** Lies on the floor until woken. */
+  /** Waits out of sight until it is summoned. */
   sleep(): void {
     this.state = 'dormant';
-    this.animator.play('Skeletons_Inactive_Floor_Pose', { fade: 0 });
+    this.root.visible = false;
+    this.animator.play('Idle_Combat', { fade: 0 });
   }
 
-  /** Gets up off the floor (dormant ones) or climbs out of the ground (reinforcements). */
-  rise(fromGround: boolean): void {
+  /** How long the glowing summoning ring shows before the monster pops out of it. */
+  static readonly SUMMON_TIME = 0.9;
+  private static readonly POP_TIME = 0.28;
+  private readonly fullScale = new THREE.Vector3();
+
+  /**
+   * Summoned like in Hades: a ring glows on the floor first (the game draws
+   * it), so you can see where a monster is coming; then it pops out ready to
+   * fight. No lying on the floor and climbing up.
+   */
+  rise(): void {
+    if (this.state !== 'rising') this.fullScale.copy(this.model.scale);
     this.state = 'rising';
     this.stateTime = 0;
-    const clip = fromGround ? 'Spawn_Ground_Skeletons' : 'Skeletons_Awaken_Floor';
-    this.animator.play(clip, { loop: false, fade: fromGround ? 0 : 0.1, speed: fromGround ? 1.15 : 1.35, restart: true });
+    this.root.visible = false;
+    this.animator.play('Idle_Combat', { fade: 0, restart: true });
+  }
+
+  /** True while the summoning ring is still showing and the monster isn't out yet. */
+  get summoning(): boolean {
+    return this.state === 'dormant' || (this.state === 'rising' && this.stateTime < Enemy.SUMMON_TIME);
   }
 
   /** Applies a hit. Returns the damage dealt, 0 if blocked, -1 if it can't be hurt right now. */
   hurt(amount: number, from: THREE.Vector3, knockback: number): number {
-    if (!this.alive || this.state === 'dormant') return -1;
+    if (!this.alive || this.summoning) return -1;
     if (this.def.block > 0 && this.state !== 'windup' && Math.random() < this.def.block) {
       this.flash('#9fd8ff', 0.12);
       return 0;
@@ -258,9 +274,21 @@ export class Enemy extends Character {
         this.deadTime += dt;
         if (this.deadTime > 1.8) this.position.y = -(this.deadTime - 1.8) * 0.9;
         return;
-      case 'rising':
-        if (this.animator.progress >= 1) this.toChase();
+      case 'rising': {
+        const t = this.stateTime - Enemy.SUMMON_TIME;
+        if (t < 0) return;
+        this.root.visible = true;
+        // Pops out a little too big, then settles (an "ease out back").
+        const k = Math.min(1, t / Enemy.POP_TIME);
+        const c = 2.2;
+        const pop = 1 + (c + 1) * Math.pow(k - 1, 3) + c * Math.pow(k - 1, 2);
+        this.model.scale.copy(this.fullScale).multiplyScalar(Math.max(0.05, pop));
+        if (k >= 1) {
+          this.model.scale.copy(this.fullScale);
+          this.toChase();
+        }
         return;
+      }
       case 'hurt':
         this.stun -= dt;
         this.velocity.multiplyScalar(Math.exp(-12 * dt));

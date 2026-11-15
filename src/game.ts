@@ -123,6 +123,12 @@ export class Game {
 
   private enemies: Enemy[] = [];
   private readonly rings = new Map<Enemy, THREE.Mesh>();
+  /** Glowing summoning circles on the floor, shown just before a monster appears. */
+  private portals: { mesh: THREE.Mesh; at: THREE.Vector3; t: number; size: number }[] = [];
+  private readonly portalGeometry = new THREE.PlaneGeometry(2.2, 2.2);
+  private readonly portalTexture = Game.makePortalTexture();
+  private readonly portalColor = new THREE.Color('#b25cff');
+  private readonly portalHot = new THREE.Color('#e9c2ff');
   private waves: EnemyKind[][] = [];
   private waveCooldown = 0;
   private projectiles: Projectile[] = [];
@@ -161,6 +167,10 @@ export class Game {
   private readonly guideGoal = new THREE.Vector3();
   private readonly guideDir = new THREE.Vector3();
   private guideTimer = 0;
+  private arrowYaw = 0;
+  private arrowShown = false;
+  private arrowTarget: Enemy | null = null;
+  private readonly arrowColor = new THREE.Color();
 
   // Hero select: all four heroes in a row; the chosen one steps forward and spins.
   private lineup: Hero[] = [];
@@ -680,11 +690,9 @@ export class Game {
     this.bossCalls = [0.66, 0.33];
     this.later(delay, () => {
       if (!king.alive) return;
-      king.rise(false);
-      this.audio.play('rise');
+      this.summon(king, 2.2);
       this.audio.play('defeat');
-      this.shake(0.4);
-      this.puff(king.position, 30);
+      this.later(Enemy.SUMMON_TIME, () => this.shake(0.4));
       this.ui.bossBar('Skeleton King', 1);
       this.ui.objective('Defeat the Skeleton King! Dodge out of the red rings');
       this.later(1.5, () => this.tip('boss', 'Big red ring = a huge slam is coming. Press <kbd>Space</kbd> to dodge out!', 6));
@@ -741,6 +749,8 @@ export class Game {
   private clearActors(): void {
     for (const e of this.enemies) this.scene.remove(e.root);
     for (const ring of this.rings.values()) this.scene.remove(ring);
+    for (const p of this.portals) this.scene.remove(p.mesh);
+    this.portals = [];
     for (const p of this.projectiles) this.scene.remove(p.mesh);
     for (const z of this.zones) this.scene.remove(z.mesh);
     for (const p of this.pickups) this.scene.remove(p.object);
@@ -794,6 +804,94 @@ export class Game {
     return enemy;
   }
 
+  /**
+   * Hades-style summoning: a purple circle glows on the floor with sparks
+   * rising from it, so you can see where a monster is coming, and about a
+   * second later the monster pops out in a puff of dark smoke.
+   */
+  private summon(e: Enemy, size = e.def.scale * 1.1): void {
+    if (!e.alive) return;
+    e.rise();
+    const mesh = new THREE.Mesh(
+      this.portalGeometry,
+      new THREE.MeshBasicMaterial({ map: this.portalTexture, color: this.portalColor, transparent: true, opacity: 0, depthWrite: false, blending: THREE.AdditiveBlending }),
+    );
+    mesh.rotation.x = -Math.PI / 2;
+    mesh.position.set(e.position.x, 0.05, e.position.z);
+    mesh.renderOrder = 2;
+    this.scene.add(mesh);
+    this.portals.push({ mesh, at: e.position.clone(), t: 0, size });
+    this.audio.play('summon');
+    this.later(Enemy.SUMMON_TIME, () => {
+      if (!e.alive) return;
+      this.puff(e.position, 18);
+      this.burst(e.position.clone().setY(0.9), this.portalColor, 26, 3.5);
+      this.audio.play('rise');
+    });
+  }
+
+  /** A soft glowing circle with a bright rim and a few rune ticks, drawn once. */
+  private static makePortalTexture(): THREE.CanvasTexture {
+    const size = 256;
+    const c = document.createElement('canvas');
+    c.width = c.height = size;
+    const g = c.getContext('2d')!;
+    const mid = size / 2;
+    const fill = g.createRadialGradient(mid, mid, 0, mid, mid, mid);
+    fill.addColorStop(0, 'rgba(255,255,255,0.35)');
+    fill.addColorStop(0.6, 'rgba(255,255,255,0.18)');
+    fill.addColorStop(0.78, 'rgba(255,255,255,0.9)');
+    fill.addColorStop(0.84, 'rgba(255,255,255,1)');
+    fill.addColorStop(0.9, 'rgba(255,255,255,0.25)');
+    fill.addColorStop(1, 'rgba(255,255,255,0)');
+    g.fillStyle = fill;
+    g.fillRect(0, 0, size, size);
+    g.strokeStyle = 'rgba(255,255,255,0.8)';
+    g.lineWidth = 5;
+    for (let i = 0; i < 8; i++) {
+      const a = (i / 8) * Math.PI * 2;
+      g.beginPath();
+      g.arc(mid, mid, mid * 0.66, a, a + 0.32);
+      g.stroke();
+    }
+    const tex = new THREE.CanvasTexture(c);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    return tex;
+  }
+
+  private updatePortals(dt: number): void {
+    for (let i = this.portals.length - 1; i >= 0; i--) {
+      const p = this.portals[i];
+      p.t += dt;
+      const grow = Math.min(1, p.t / 0.35);
+      const fadeOut = p.t > Enemy.SUMMON_TIME ? Math.max(0, 1 - (p.t - Enemy.SUMMON_TIME) / 0.35) : 1;
+      const mat = p.mesh.material as THREE.MeshBasicMaterial;
+      mat.opacity = grow * fadeOut * (0.85 + Math.sin(p.t * 14) * 0.1);
+      p.mesh.scale.setScalar(p.size * 0.9 * (0.4 + 0.6 * (1 - Math.pow(1 - grow, 3))));
+      p.mesh.rotation.z += dt * 2.4;
+      if (p.t < Enemy.SUMMON_TIME && Math.random() < dt * 40) {
+        const a = Math.random() * Math.PI * 2;
+        const r = p.size * (0.5 + Math.random() * 0.45);
+        this.glow.spawn({
+          x: p.at.x + Math.cos(a) * r,
+          y: 0.1,
+          z: p.at.z + Math.sin(a) * r,
+          vy: 1.4 + Math.random() * 1.2,
+          life: 0.5 + Math.random() * 0.3,
+          size: 0.1,
+          sizeEnd: 0.02,
+          color: Math.random() < 0.3 ? this.portalHot : this.portalColor,
+          intensity: 3,
+        });
+      }
+      if (fadeOut <= 0) {
+        this.scene.remove(p.mesh);
+        (p.mesh.material as THREE.Material).dispose();
+        this.portals.splice(i, 1);
+      }
+    }
+  }
+
   private claimPillar(): void {
     this.step = 'fight';
     this.crypt.altar.awaken();
@@ -806,9 +904,7 @@ export class Game {
       if (e.state !== 'dormant' || this.waitingInAmbush(e)) return;
       this.later(0.35 + i * 0.35, () => {
         if (!e.alive) return;
-        e.rise(false);
-        this.audio.play('rise');
-        this.puff(e.position, 14);
+        this.summon(e);
       });
     });
     this.waveCooldown = 4;
@@ -827,9 +923,7 @@ export class Game {
           this.floatAt(at, 3, 'Elite!', 'crit');
         }
         enemy.facing = Math.atan2(this.hero.position.x - at.x, this.hero.position.z - at.z);
-        enemy.rise(true);
-        this.puff(at, 22);
-        this.audio.play('rise');
+        this.summon(enemy);
       });
     });
   }
@@ -983,7 +1077,7 @@ export class Game {
       }
     }
 
-    this.crypt.torches.update(t, dt);
+    this.crypt.torches.update(t, dt, this.hero.position);
     this.crypt.runes.update(t);
     this.crypt.altar.update(t, dt);
     this.crypt.door.update(t, dt);
@@ -1126,6 +1220,7 @@ export class Game {
       }
     }
     this.updateAmbushes();
+    this.updatePortals(dt);
     this.updateLostTreasure();
     this.updateBrazier(dt);
     this.updateBoss();
@@ -1326,7 +1421,7 @@ export class Game {
       const dz = e.position.z - this.hero.position.z;
       const min = e.radius + this.hero.radius;
       const d2 = dx * dx + dz * dz;
-      if (e.state !== 'dormant' && d2 < min * min && d2 > 1e-6) {
+      if (!e.summoning && d2 < min * min && d2 > 1e-6) {
         const d = Math.sqrt(d2);
         e.position.x += (dx / d) * (min - d);
         e.position.z += (dz / d) * (min - d);
@@ -1779,13 +1874,11 @@ export class Game {
       if (a.sprung || p.x < r.x0 + 1 || p.x > r.x1 - 1 || p.z < r.z0 + 1 || p.z > r.z1 - 1) continue;
       a.sprung = true;
       this.ui.hint(a.encounter.shout, 3.5);
-      this.audio.play('rise');
-      this.shake(0.25);
+      this.shake(0.15);
       a.monsters.forEach((e, i) => {
         this.later(0.2 + i * 0.3, () => {
           if (!e.alive) return;
-          e.rise(false);
-          this.puff(e.position, 14);
+          this.summon(e);
         });
       });
     }
@@ -1901,34 +1994,52 @@ export class Game {
     else if (this.step === 'explore') goal = this.crypt.altar.position;
     else if (this.step === 'cleared' && this.crypt.door.isOpen) goal = this.crypt.doorAt.clone().add(new THREE.Vector3(0, 0, 1));
     else if (this.step === 'fight') {
-      // Only when every monster is far away (or behind the hero), point to the closest.
-      const near = this.nearestEnemy(hero.position, 7);
-      const far = near ? null : this.nearestEnemy(hero.position, 40);
-      if (far) {
+      // Only when every monster is far away, point to one. Stick with the same
+      // monster until it dies, so the arrow doesn't flick between them.
+      const t = this.arrowTarget;
+      if (!t || !t.alive || !t.active) this.arrowTarget = this.nearestEnemy(hero.position, 7) ? null : this.nearestEnemy(hero.position, 40);
+      const far = this.arrowTarget;
+      if (far && far.position.distanceTo(hero.position) > 6) {
         goal = far.position;
         color = '#ff5a4a';
       }
-    }
+    } else this.arrowTarget = null;
+    // Show/hide with a gap between the two distances, so it doesn't blink on and off at the edge.
+    const d = goal ? hero.position.distanceTo(goal) : 0;
+    if (!goal || !hero.alive || d < 3.6) this.arrowShown = false;
+    else if (d > 4.6) this.arrowShown = true;
     const mat = this.arrow.material as THREE.MeshBasicMaterial;
-    const show = goal !== null && hero.alive && hero.position.distanceTo(goal) > 4.2;
-    mat.opacity = THREE.MathUtils.damp(mat.opacity, show ? 0.75 + Math.sin(this.time * 5) * 0.2 : 0, 10, dt);
+    // A slow, gentle breathe instead of a fast flash.
+    mat.opacity = THREE.MathUtils.damp(mat.opacity, this.arrowShown ? 0.72 + Math.sin(this.time * 2) * 0.08 : 0, 6, dt);
     if (!goal) return;
-    mat.color.set(color).multiplyScalar(1.6);
+    this.arrowColor.set(color).multiplyScalar(1.6);
+    mat.color.lerp(this.arrowColor, 1 - Math.exp(-6 * dt));
     let dir = this.tmp.copy(goal).sub(hero.position).setY(0).normalize();
     if (this.crypt.connected) {
-      if (!this.guideNav || this.guideNav.grid !== this.crypt || this.guideGoal.distanceToSquared(goal) > 0.25 || (this.guideTimer -= dt) < 0) {
+      if (!this.guideNav || this.guideNav.grid !== this.crypt || this.guideGoal.distanceToSquared(goal) > 4 || (this.guideTimer -= dt) < 0) {
         if (!this.guideNav || this.guideNav.grid !== this.crypt) this.guideNav = { grid: this.crypt, nav: new NavGrid(this.crypt.colliders, 0.7) };
         this.guideNav.nav.update(goal);
         this.guideGoal.copy(goal);
         this.guideTimer = 1;
       }
-      const step = this.guideNav.nav.direction(hero.position, this.guideDir);
+      const step = this.guideNav.nav.lookAhead(hero.position, this.guideDir, 6);
       if (step) dir = this.tmp.copy(step);
     }
-    const pulse = 2.9 + Math.sin(this.time * 5) * 0.2;
+    // Turn smoothly toward the new direction (the walking map gives steps in
+    // 45-degree jumps; snapping to them is what made it look glitchy).
+    const want = Math.atan2(dir.x, dir.z);
+    if (mat.opacity < 0.05) this.arrowYaw = want;
+    else {
+      let diff = want - this.arrowYaw;
+      diff = Math.atan2(Math.sin(diff), Math.cos(diff));
+      this.arrowYaw += diff * (1 - Math.exp(-5 * dt));
+    }
+    const ax = Math.sin(this.arrowYaw);
+    const az = Math.cos(this.arrowYaw);
+    const ring = 2.9 + Math.sin(this.time * 2) * 0.12;
     // Floats just above the altar's steps so they can't hide it.
-    this.arrow.position.set(hero.position.x + dir.x * pulse, 0.62, hero.position.z + dir.z * pulse);
-    this.arrow.rotation.y = Math.atan2(dir.x, dir.z);
+    this.arrow.position.set(hero.position.x + ax * ring, 0.62, hero.position.z + az * ring);
+    this.arrow.rotation.y = this.arrowYaw;
     this.arrow.scale.setScalar(1.7);
   }
 

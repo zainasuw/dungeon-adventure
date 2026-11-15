@@ -76,6 +76,40 @@ export class NavGrid {
    * The direction to walk from `pos` to get closer to the target, or null when
    * there's no better neighbour (already next to the target, or off the map).
    */
+  /**
+   * Like direction(), but points at a spot several steps down the path, so the
+   * result changes smoothly instead of jumping from cell to cell.
+   */
+  lookAhead(pos: THREE.Vector3, out: THREE.Vector3, steps = 5): THREE.Vector3 | null {
+    const { cols, rows, dist } = this;
+    let i = this.index(pos.x, pos.z);
+    if (i < 0) return null;
+    if (dist[i] === Infinity) i = this.nearestOpen(i);
+    if (i < 0) return null;
+    for (let s = 0; s < steps; s++) {
+      const c = i % cols;
+      const r = (i - c) / cols;
+      let best = -1;
+      let bestD = dist[i];
+      for (const [dc, dr] of NEIGHBORS) {
+        const nc = c + dc;
+        const nr = r + dr;
+        if (nc < 0 || nr < 0 || nc >= cols || nr >= rows) continue;
+        const n = nr * cols + nc;
+        if (dist[n] < bestD) {
+          bestD = dist[n];
+          best = n;
+        }
+      }
+      if (best < 0) break;
+      i = best;
+    }
+    const c = i % cols;
+    const r = (i - c) / cols;
+    out.set(this.minX + (c + 0.5) * this.cell - pos.x, 0, this.minZ + (r + 0.5) * this.cell - pos.z);
+    return out.lengthSq() > 1e-4 ? out.normalize() : null;
+  }
+
   direction(pos: THREE.Vector3, out: THREE.Vector3): THREE.Vector3 | null {
     const { cols, rows, dist } = this;
     let i = this.index(pos.x, pos.z);
