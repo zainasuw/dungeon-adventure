@@ -19,6 +19,7 @@ import type { Encounter } from './world/dungeon';
 import { NavGrid } from './world/nav';
 import { Particles } from './world/particles';
 import { Bats } from './world/bats';
+import { makeBook, makeCrystal } from './world/job-props';
 
 type Phase = 'title' | 'select' | 'play' | 'dead' | 'victory';
 /** Steps inside one hall. */
@@ -51,6 +52,20 @@ interface Zone {
 interface Potion {
   object: THREE.Group;
   base: THREE.Vector3;
+}
+
+/** One lantern, book or crystal of a hall's job. */
+interface JobItem {
+  object: THREE.Group;
+  at: THREE.Vector3;
+  done: boolean;
+  /** Hits left (crystals). */
+  hp: number;
+  /** Lanterns get a light made up front (off), so the light count never changes mid-level. */
+  light: THREE.PointLight | null;
+  box: Crate['box'] | null;
+  flash: number;
+  seed: number;
 }
 
 interface Crate {
@@ -128,6 +143,12 @@ export class Game {
   private readonly portalGeometry = new THREE.PlaneGeometry(2.2, 2.2);
   private readonly portalTexture = Game.makePortalTexture();
   private readonly portalColor = new THREE.Color('#b25cff');
+  private jobItems: JobItem[] = [];
+  private jobNag = 0;
+  /** Seconds left to hold out in a "defend" hall (0 when not defending). */
+  private defendLeft = 0;
+  private defendSpawn = 0;
+  private defendWave = 0;
   private readonly portalHot = new THREE.Color('#e9c2ff');
   private waves: EnemyKind[][] = [];
   private waveCooldown = 0;
@@ -642,6 +663,7 @@ export class Game {
     if (!live) return;
     for (const [x, z] of level.potions) this.dropPotion(new THREE.Vector3(x, 0, z));
     this.placeCrates();
+    this.placeJob();
     this.levelStartPotions = this.potions;
     this.step = 'explore';
     this.hero.revive();
@@ -665,6 +687,9 @@ export class Game {
     if (this.dark > 0) {
       this.applyDarkness();
       this.ui.objective('It\'s dark… Light the torch');
+    } else if (this.jobLeft() > 0) {
+      this.ui.objective(this.jobText());
+      this.later((intro ? 1.1 : 0) + 3.4, () => this.ui.hint(this.jobIntro(), 6));
     }
     const delay = intro ? 1.1 : 0;
     this.later(delay + 2.6, () => this.tip('walk', 'Walk with <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> or the arrow keys'));
@@ -751,6 +776,7 @@ export class Game {
     for (const ring of this.rings.values()) this.scene.remove(ring);
     for (const p of this.portals) this.scene.remove(p.mesh);
     this.portals = [];
+    this.clearJob();
     for (const p of this.projectiles) this.scene.remove(p.mesh);
     for (const z of this.zones) this.scene.remove(z.mesh);
     for (const p of this.pickups) this.scene.remove(p.object);
@@ -892,6 +918,266 @@ export class Game {
     }
   }
 
+  // ───────────────────────── Hall jobs ─────────────────────────
+
+  private placeJob(): void {
+    const job = LEVELS[this.level].job;
+    if (!job || job.kind === 'defend') return;
+    job.spots.forEach(([x, z], i) => {
+      const at = new THREE.Vector3(x, 0, z);
+      let object: THREE.Group;
+      let light: THREE.PointLight | null = null;
+      let box: Crate['box'] | null = null;
+      if (job.kind === 'lanterns') {
+        object = new THREE.Group();
+        const lantern = this.assets.piece('hw_lantern_standing');
+        lantern.scale.setScalar(1.8);
+        lantern.traverse((o) => (o.castShadow = true));
+        object.add(lantern);
+        light = new THREE.PointLight('#ffb347', 0, 11, 2);
+        light.position.set(0, 1.6, 0);
+        object.add(light);
+      } else if (job.kind === 'books') {
+        object = new THREE.Group();
+        const book = makeBook(['#6b3fa0', '#2f6db5', '#a83a3a'][i % 3]);
+        book.name = 'book';
+        object.add(book);
+      } else {
+        // Cursed purple, so it stands out on any floor (the Ember Deep is all orange).
+        object = makeCrystal('#a24dff');
+      }
+      // A golden circle on the floor marks it as part of the job (the
+      // graveyard has other, decorative lanterns).
+      const mark = new THREE.Mesh(
+        this.portalGeometry,
+        new THREE.MeshBasicMaterial({ map: this.portalTexture, color: this.gold, transparent: true, opacity: 0.7, depthWrite: false, blending: THREE.AdditiveBlending }),
+      );
+      mark.name = 'mark';
+      mark.rotation.x = -Math.PI / 2;
+      mark.position.y = 0.06;
+      mark.scale.setScalar(job.kind === 'books' ? 0.85 : 1.3);
+      mark.renderOrder = 2;
+      object.add(mark);
+      if (job.kind === 'books') object.getObjectByName('book')!.scale.setScalar(1.45);
+      object.position.copy(at);
+      this.scene.add(object);
+      if (job.kind !== 'books') {
+        const half = job.kind === 'crystals' ? 0.6 : 0.35;
+        box = { minX: x - half, maxX: x + half, minZ: z - half, maxZ: z + half };
+        this.crypt.colliders.boxes.push(box);
+      }
+      this.jobItems.push({ object, at, done: false, hp: job.kind === 'crystals' ? 3 : 1, light, box, flash: 0, seed: i * 1.7 });
+    });
+    this.nav = new NavGrid(this.crypt.colliders);
+  }
+
+  private clearJob(): void {
+    for (const item of this.jobItems) {
+      this.scene.remove(item.object);
+      const i = item.box ? this.crypt.colliders.boxes.indexOf(item.box) : -1;
+      if (i >= 0) this.crypt.colliders.boxes.splice(i, 1);
+    }
+    this.jobItems = [];
+    this.defendLeft = 0;
+  }
+
+  private jobLeft(): number {
+    return this.jobItems.filter((j) => !j.done).length;
+  }
+
+  private jobText(): string {
+    const job = LEVELS[this.level].job;
+    const done = this.jobItems.length - this.jobLeft();
+    const n = this.jobItems.length;
+    if (job?.kind === 'lanterns') return `Light the lanterns: ${done} of ${n}`;
+    if (job?.kind === 'books') return `Find the lost books: ${done} of ${n}`;
+    if (job?.kind === 'crystals') return `Smash the cursed crystals: ${done} of ${n}`;
+    return '';
+  }
+
+  private jobIntro(): string {
+    const job = LEVELS[this.level].job;
+    const n = this.jobItems.length;
+    if (job?.kind === 'lanterns') return `Light the <b>${n} lanterns</b> to wake the pillar. Walk up and press <kbd>F</kbd>. Careful, the graves are restless!`;
+    if (job?.kind === 'books') return `Find the <b>${n} lost spell books</b> to wake the pillar. Walk over a book to grab it.`;
+    if (job?.kind === 'crystals') return `Smash the <b>${n} cursed crystals</b> to wake the pillar. Hit each one with <kbd>F</kbd>.`;
+    return '';
+  }
+
+  private nearestJobItem(): JobItem | null {
+    let best: JobItem | null = null;
+    let bestD = Infinity;
+    for (const j of this.jobItems) {
+      if (j.done) continue;
+      const d = j.at.distanceTo(this.hero.position);
+      if (d < bestD) {
+        bestD = d;
+        best = j;
+      }
+    }
+    return best;
+  }
+
+  private nearLantern(): JobItem | null {
+    if (LEVELS[this.level].job?.kind !== 'lanterns' || this.phase !== 'play') return null;
+    return this.jobItems.find((j) => !j.done && j.at.distanceTo(this.hero.position) < 2.6) ?? null;
+  }
+
+  private updateJob(dt: number): void {
+    const job = LEVELS[this.level].job;
+    if (!job || job.kind === 'defend' || !this.jobItems.length) return;
+    const t = this.time;
+    const hero = this.hero;
+    for (const j of this.jobItems) {
+      j.flash = Math.max(0, j.flash - dt * 4);
+      const mark = j.object.getObjectByName('mark');
+      if (mark) {
+        mark.rotation.z = t * 0.5 + j.seed;
+        ((mark as THREE.Mesh).material as THREE.MeshBasicMaterial).opacity = j.done ? 0 : 0.55 + Math.sin(t * 2.2 + j.seed) * 0.15;
+      }
+      if (job.kind === 'books') {
+        const book = j.object.getObjectByName('book')!;
+        if (j.done) continue;
+        book.position.y = 0.9 + Math.sin(t * 2 + j.seed) * 0.15;
+        book.rotation.y = t * 0.9 + j.seed;
+        if (Math.random() < dt * 14) this.glow.spawn({ x: j.at.x + (Math.random() - 0.5) * 0.8, y: 0.6 + Math.random() * 0.6, z: j.at.z + (Math.random() - 0.5) * 0.8, vy: 0.6, life: 0.9, size: 0.08, sizeEnd: 0.01, color: this.gold, intensity: 3 });
+        if (hero.alive && j.at.distanceTo(hero.position) < 1.4) this.finishJobItem(j);
+      } else if (job.kind === 'lanterns') {
+        if (j.done) {
+          j.light!.intensity = 9 + Math.sin(t * 11 + j.seed) * 1.2;
+          if (Math.random() < dt * 10) this.glow.spawn({ x: j.at.x, y: 1.75, z: j.at.z, vy: 0.9, life: 0.5, size: 0.1, sizeEnd: 0.02, color: this.fireColor, intensity: 3 });
+          continue;
+        }
+        // Unlit: a faint wisp, so you can spot them in the dark.
+        if (Math.random() < dt * 5) this.glow.spawn({ x: j.at.x + (Math.random() - 0.5) * 0.3, y: 1.6, z: j.at.z + (Math.random() - 0.5) * 0.3, vy: 0.4, life: 1.2, size: 0.07, sizeEnd: 0.01, color: this.gold, intensity: 2 });
+        if (hero.alive && j.at.distanceTo(hero.position) < 2.6 && (this.input.keyPressed('KeyF') || this.input.keyPressed('KeyJ'))) this.finishJobItem(j);
+      } else {
+        if (j.done) continue;
+        const core = j.object.getObjectByName('core')!;
+        core.rotation.y = t * 0.6 + j.seed;
+        j.object.position.x = j.at.x + (j.flash > 0 ? Math.sin(t * 90) * 0.08 * j.flash : 0);
+        const mat = (core as THREE.Mesh).material as THREE.MeshStandardMaterial;
+        mat.emissiveIntensity = 1.2 + Math.sin(t * 3 + j.seed) * 0.3 + j.flash * 3;
+        if (Math.random() < dt * 6) this.glow.spawn({ x: j.at.x + (Math.random() - 0.5) * 1, y: 0.4 + Math.random() * 2, z: j.at.z + (Math.random() - 0.5) * 1, vy: 0.5, life: 1, size: 0.07, sizeEnd: 0.01, color: this.portalColor, intensity: 2.5 });
+        if (hero.alive && j.at.distanceTo(hero.position) < 4) this.tip('crystal', 'Hit the crystal with <kbd>F</kbd> to smash it!', 5);
+      }
+    }
+  }
+
+  /** A swing, spin or shot reached the crystals. Returns true if one was hit. */
+  private hitCrystals(from: THREE.Vector3, reach: number, facing?: THREE.Vector3, arc = Math.PI * 2): boolean {
+    if (LEVELS[this.level].job?.kind !== 'crystals') return false;
+    let hit = false;
+    for (const j of this.jobItems) {
+      if (j.done) continue;
+      const d = this.tmp.copy(j.at).sub(from).setY(0);
+      const dist = d.length();
+      if (dist > reach + 0.6) continue;
+      if (facing && dist > 1 && d.normalize().dot(facing) < Math.cos(arc / 2)) continue;
+      hit = true;
+      j.hp -= 1;
+      j.flash = 1;
+      this.burst(j.at.clone().setY(1.3), this.portalColor, 16, 3.5);
+      this.audio.play('block');
+      this.shake(0.12);
+      if (j.hp <= 0) this.finishJobItem(j);
+      else this.floatAt(j.at, 2.8, j.hp === 1 ? 'Cracking!' : 'Crack!', 'damage');
+    }
+    return hit;
+  }
+
+  private finishJobItem(j: JobItem): void {
+    if (j.done) return;
+    j.done = true;
+    const kind = LEVELS[this.level].job?.kind;
+    const easy = this.difficulty.id === 'easy';
+    if (kind === 'books') {
+      this.scene.remove(j.object);
+      this.audio.play('pickup');
+      this.burst(j.at.clone().setY(1), this.gold, 30, 3.5);
+      this.floatAt(j.at, 1.8, 'Book found!', 'heal');
+      // A guardian answers the alarm.
+      this.summonNear(j.at, [easy ? 'runt' : 'skeleton']);
+    } else if (kind === 'lanterns') {
+      this.audio.play('cast');
+      this.burst(j.at.clone().setY(1.7), this.fireColor, 40, 3.5);
+      this.floatAt(j.at, 2.6, 'Lit!', 'heal');
+      // The graves nearby burst open.
+      this.ui.hint('The graves burst open!', 2.5);
+      this.later(0.4, () => this.summonNear(j.at, easy ? ['runt'] : ['runt', 'skeleton']));
+    } else {
+      this.scene.remove(j.object);
+      if (j.box) {
+        const i = this.crypt.colliders.boxes.indexOf(j.box);
+        if (i >= 0) this.crypt.colliders.boxes.splice(i, 1);
+        this.nav = new NavGrid(this.crypt.colliders);
+      }
+      this.audio.play('crit');
+      this.shake(0.35);
+      this.burst(j.at.clone().setY(1.3), this.portalColor, 70, 6);
+      this.puff(j.at, 16);
+      this.dropCoins(j.at, 4);
+      this.summonNear(j.at, [easy ? 'runt' : 'skeleton']);
+    }
+    if (this.jobLeft() > 0) {
+      this.ui.objective(this.jobText());
+      return;
+    }
+    // All done: the pillar wakes up.
+    this.later(0.6, () => {
+      this.audio.play('clear');
+      this.burst(this.crypt.altar.position.clone().setY(2.6), this.gold, 70, 5);
+      this.ui.objective('The pillar is awake! Go to the altar');
+      this.ui.hint('The pillar is awake! Follow the arrow to the altar.', 4);
+    });
+  }
+
+  /** Summons monsters around a spot, on open floor. */
+  private summonNear(at: THREE.Vector3, kinds: EnemyKind[]): void {
+    kinds.forEach((kind, i) => {
+      const a = Math.atan2(this.hero.position.x - at.x, this.hero.position.z - at.z) + Math.PI + (i - (kinds.length - 1) / 2) * 1.3;
+      const spot = new THREE.Vector3(at.x + Math.sin(a) * 2.4, 0, at.z + Math.cos(a) * 2.4);
+      this.crypt.colliders.resolve(spot, 0.6);
+      this.later(i * 0.3, () => {
+        const e = this.spawnEnemy(kind, spot);
+        e.facing = Math.atan2(this.hero.position.x - spot.x, this.hero.position.z - spot.z);
+        this.summon(e);
+      });
+    });
+  }
+
+  /** Forest: monsters keep coming until the timer runs out. */
+  private updateDefend(dt: number, living: number): void {
+    const was = Math.ceil(this.defendLeft);
+    this.defendLeft = Math.max(0, this.defendLeft - dt);
+    const left = Math.ceil(this.defendLeft);
+    if (left !== was && left <= 5 && left > 0) this.audio.play('tick');
+    this.ui.objective(`Protect the pillar! Hold out: ${left} s`);
+    this.defendSpawn -= dt;
+    const pool = LEVELS[this.level].waves;
+    if (this.defendSpawn <= 0 && this.defendLeft > 4 && pool.length) {
+      this.defendSpawn = this.difficulty.id === 'easy' ? 8 : 6;
+      if (living < (this.difficulty.id === 'easy' ? 4 : 6)) this.spawnWave(pool[this.defendWave++ % pool.length]);
+    }
+    if (this.defendLeft > 0) return;
+    // Time! The pillar's light blasts every monster away.
+    this.burst(this.crypt.altar.position.clone().setY(2), this.gold, 120, 9);
+    this.shake(0.5);
+    for (const e of this.enemies) {
+      if (!e.alive) continue;
+      if (e.summoning) {
+        e.alive = false;
+        e.root.visible = false;
+        continue;
+      }
+      e.hurt(99999, this.crypt.altar.position, 4);
+      this.onEnemyDied(e);
+    }
+    this.waves.length = 0;
+    this.ui.hint('You held out! The pillar\'s light blasts the monsters away.', 4);
+    this.onCleared();
+  }
+
   private claimPillar(): void {
     this.step = 'fight';
     this.crypt.altar.awaken();
@@ -908,6 +1194,14 @@ export class Game {
       });
     });
     this.waveCooldown = 4;
+    const job = LEVELS[this.level].job;
+    if (job?.kind === 'defend') {
+      this.defendLeft = job.seconds;
+      this.defendSpawn = 5;
+      this.defendWave = 0;
+      this.ui.objective(`Protect the pillar! Hold out for ${job.seconds} seconds`);
+      this.later(1.4, () => this.ui.hint('Monsters will keep coming. <b>Stay alive until the timer runs out!</b>', 5));
+    }
   }
 
   private spawnWave(kinds: EnemyKind[], eliteFirst = false): void {
@@ -1230,7 +1524,12 @@ export class Game {
     // The hall's steps.
     const altarDist = hero.position.distanceTo(this.crypt.altar.position);
     const walked = hero.position.distanceTo(this.hallStart) > 0.4 && !(this.brazier && !this.brazier.lit);
-    if (this.step === 'explore' && altarDist < ALTAR_REACH && walked && hero.state === 'free') {
+    this.updateJob(dt);
+    if (this.step === 'explore' && altarDist < ALTAR_REACH + 1.5 && this.jobLeft() > 0 && (this.jobNag -= dt) < 0) {
+      this.jobNag = 4;
+      this.ui.hint(`The pillar is still asleep. ${this.jobIntro()}`, 3.5);
+    }
+    if (this.step === 'explore' && altarDist < ALTAR_REACH && walked && hero.state === 'free' && this.jobLeft() === 0) {
       this.step = 'claiming';
       hero.interact();
       this.crypt.altar.setCharge(1);
@@ -1243,13 +1542,17 @@ export class Game {
     if (this.step === 'fight') {
       const living = this.enemies.filter((e) => e.alive && !this.waitingInAmbush(e));
       const awake = living.filter((e) => e.state !== 'dormant');
-      if (this.waves.length > 0 && living.every((e) => e.state !== 'dormant')) {
+      if (this.defendLeft <= 0 && this.waves.length > 0 && living.every((e) => e.state !== 'dormant')) {
         this.waveCooldown -= dt;
         if (this.waveCooldown <= 0 && awake.length <= 1) {
           const lastWave = this.waves.length === 1;
           this.spawnWave(this.waves.shift()!, lastWave);
           this.waveCooldown = 3;
         }
+      }
+      if (this.defendLeft > 0) {
+        this.updateDefend(dt, living.length);
+        return;
       }
       const pending = this.timers.length > 0 || this.waves.length > 0;
       if (living.length === 0 && !pending) this.onCleared();
@@ -1991,6 +2294,7 @@ export class Game {
     let goal: THREE.Vector3 | null = null;
     let color = '#ffc35a';
     if (this.brazier && !this.brazier.lit) goal = this.brazier.position;
+    else if (this.step === 'explore' && this.jobLeft() > 0) goal = this.nearestJobItem()?.at ?? null;
     else if (this.step === 'explore') goal = this.crypt.altar.position;
     else if (this.step === 'cleared' && this.crypt.door.isOpen) goal = this.crypt.doorAt.clone().add(new THREE.Vector3(0, 0, 1));
     else if (this.step === 'fight') {
@@ -2094,6 +2398,7 @@ export class Game {
       this.hitEnemy(e, step.damage, p, finisher ? 4.5 : 2.2);
     }
     this.smashCrates(p, step.range + 0.6, dir, step.arc);
+    this.hitCrystals(p, step.range + 0.9, dir, step.arc);
     if (finisher) this.shake(0.18);
   }
 
@@ -2118,6 +2423,7 @@ export class Game {
           this.hitEnemy(e, kind.damage, hero.position, kind.type === 'nova' ? 6 : 3.5);
         }
         this.smashCrates(hero.position, kind.radius + 0.6);
+        this.hitCrystals(hero.position, kind.radius + 0.9);
         break;
       }
       case 'bolt': {
@@ -2278,6 +2584,7 @@ export class Game {
       const pos = p.mesh.position;
       this.glow.spawn({ x: pos.x, y: pos.y, z: pos.z, life: 0.25, size: 0.16, sizeEnd: 0.01, color: p.color, intensity: 3, drag: 2 });
       if (!p.hostile && this.smashCrates(pos, 0.9)) p.life = 0;
+      if (!p.hostile && p.life > 0 && this.hitCrystals(pos, 1.2)) p.life = 0;
       let dead = p.life <= 0 || this.crypt.colliders.hits(pos.x, pos.z, 0.1);
       if (!dead && p.hostile) {
         const hero = this.hero;
@@ -2492,6 +2799,9 @@ export class Game {
       // Just under the torch, so it never hides behind the goal line at the top.
       const s = this.toScreen(this.brazier.position, -0.2);
       this.ui.prompt('<kbd>F</kbd> Light the torch', s.x, s.y + 8);
+    } else if (this.nearLantern()) {
+      const s = this.toScreen(this.nearLantern()!.at, -0.2);
+      this.ui.prompt('<kbd>F</kbd> Light the lantern', s.x, s.y + 8);
     } else if (this.step === 'cleared' && this.crypt.door.isOpen) {
       const s = this.toScreen(this.crypt.doorAt.clone().add(new THREE.Vector3(0, 0, 1.4)), 0.2);
       const next = LEVELS[this.route[this.stage + 1]];

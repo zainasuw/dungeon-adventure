@@ -8,6 +8,17 @@ export interface View {
   distance: number;
 }
 
+/**
+ * Each hall's own job, so halls play differently (not just "beat everyone").
+ * Lanterns, books and crystals must be done before the pillar wakes; "defend"
+ * changes the pillar fight into holding out until a timer runs down.
+ */
+export type Job =
+  | { kind: 'lanterns'; spots: [number, number][] }
+  | { kind: 'books'; spots: [number, number][] }
+  | { kind: 'crystals'; spots: [number, number][] }
+  | { kind: 'defend'; seconds: number };
+
 export interface Level {
   /** The play camera. "Up" always walks toward the door; zoom and tilt vary by hall. */
   view: View;
@@ -28,6 +39,8 @@ export interface Level {
   potions: [number, number][];
   /** The final room: a boss fight instead of a pillar. */
   boss?: boolean;
+  /** This hall's special job (see Job). */
+  job?: Job;
 }
 
 export const LEVELS: Level[] = [
@@ -61,8 +74,9 @@ export const LEVELS: Level[] = [
     mood: 0,
     crystal: '#5ee0ff',
     sleepers: ['skeleton', 'brute', 'runt', 'mage'],
-    waves: [['runt', 'runt', 'skeleton'], ['mage', 'skeleton']],
+    waves: [['runt', 'runt', 'skeleton']],
     potions: [[-13, 8.5], [13, -8], [0, 10]],
+    job: { kind: 'books', spots: [[-8, 10], [8, -4], [-4.9, -8.9]] },
   },
   {
     view: { yaw: 0, pitch: 48, distance: 20 },
@@ -72,8 +86,9 @@ export const LEVELS: Level[] = [
     mood: 4,
     crystal: '#ff7a3d',
     sleepers: ['brute', 'skeleton', 'mage', 'skeleton'],
-    waves: [['runt', 'runt', 'runt'], ['brute', 'mage', 'skeleton']],
+    waves: [['runt', 'runt', 'runt']],
     potions: [[-13, -8.5], [13, 8.5], [-13, 8.5]],
+    job: { kind: 'crystals', spots: [[-8, 7], [8.2, 7.8], [0, -8]] },
   },
   {
     view: { yaw: 0, pitch: 50, distance: 22 },
@@ -95,8 +110,9 @@ export const LEVELS: Level[] = [
     mood: 6,
     crystal: '#8fd3ff',
     sleepers: ['skeleton', 'runt', 'skeleton', 'mage'],
-    waves: [['runt', 'runt', 'skeleton'], ['skeleton', 'mage']],
+    waves: [['runt', 'runt', 'skeleton']],
     potions: [[-18, -9], [18, 10.5], [0, -11]],
+    job: { kind: 'lanterns', spots: [[-13, 7], [13, 7], [0, -9]] },
   },
   {
     view: { yaw: 0, pitch: 44, distance: 20 },
@@ -106,8 +122,9 @@ export const LEVELS: Level[] = [
     mood: 7,
     crystal: '#ffe27a',
     sleepers: ['runt', 'skeleton', 'runt', 'brute'],
-    waves: [['runt', 'runt', 'runt'], ['skeleton', 'brute']],
+    waves: [['runt', 'runt'], ['skeleton', 'runt'], ['runt', 'brute'], ['skeleton', 'skeleton']],
     potions: [[-14, -9], [14, 9], [-3, 11.5]],
+    job: { kind: 'defend', seconds: 40 },
   },
   {
     // 7. The Old Crypt: a connected dungeon (entrance, guard room, treasure room, altar room).
