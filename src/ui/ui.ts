@@ -264,25 +264,39 @@ export class Ui {
       `<div class="card card--wide" role="dialog" aria-modal="true" aria-labelledby="howto-title">
         <h2 id="howto-title" class="card__title">How to play</h2>
         <ol class="howto">
-          ${step(1, 'Take the pillar', 'Follow the golden arrow to the glowing altar and walk up to it.', icon(PILLAR_PATH, 'icon icon--gold'))}
-          ${step(2, 'Beat the skeletons', 'Taking the pillar wakes them up. Defeat them all.', iconByName('swordSlice', 'icon icon--gold'))}
-          ${step(3, 'Go through the door', 'The golden door opens. Walk in to reach the next hall.', iconByName('teleport', 'icon icon--gold'))}
+          ${step(1, 'Do the hall\'s job', 'Follow the golden arrow. Each hall has a job: light lanterns, find books, smash crystals, catch wisps or hold out.', iconByName('starSwirl', 'icon icon--gold'))}
+          ${step(2, 'Take the pillar', 'Walk up to the glowing altar. The skeletons wake up: beat them all!', icon(PILLAR_PATH, 'icon icon--gold'))}
+          ${step(3, 'Power up', 'Pick a blessing, and spend your coins at the merchant.', iconByName('holySymbol', 'icon icon--gold'))}
+          ${step(4, 'Pick a door', 'Choose which hall comes next. Each door shows its reward.', iconByName('teleport', 'icon icon--gold'))}
         </ol>
-        <p class="howto__goal">Collect all <b>4 pillars</b> to escape and win.</p>
-        <div class="keys">
+        <p class="howto__goal">Wake all <b>4 pillars</b>, then beat the <b>Skeleton King</b> to escape!</p>
+        ${
+          this.handlers.isTouch()
+            ? `<div class="keys keys--touch">
+          ${key('Left thumb', 'Put it down anywhere on the left and slide to walk')}
+          ${key('Tap right side', 'Attack (it aims for you)')}
+          ${key('Round buttons', 'Special move, dodge, hero power, potion')}
+          ${key('Pause', 'The button in the top corner')}
+        </div>`
+            : `<div class="keys">
           ${key('W A S D', 'Walk (arrow keys work too)')}
-          ${key('F', 'Attack, or click (it aims for you)')}
+          ${key('F', 'Attack, light, open the shop (it aims for you)')}
           ${key('G', 'Special move, or right-click')}
           ${key('Space', 'Dodge')}
           ${key('R', 'Hero power')}
-          ${key('Right-drag', 'Turn and tilt the camera (like Roblox)')}
-          ${key('Q / E', 'Turn the camera')}
-          ${key('Tab', 'Hold to look around the room')}
-          ${key('Scroll', 'Zoom in and out')}
           ${key('H', 'Drink a potion')}
+          ${key('Right-drag', 'Turn and tilt the camera')}
+          ${key('Q / E', 'Turn the camera')}
+          ${key('Scroll', 'Zoom in and out')}
+          ${key('Tab', 'Hold to look around')}
           ${key('Esc', 'Pause')}
-        </div>
-        <p class="howto__tip">Tip: a red ring on the floor means a skeleton is about to swing. Dodge out of it!</p>
+        </div>`
+        }
+        <ul class="howto__tips">
+          <li><b class="tip-red">Red ring</b> on the floor: a skeleton is about to swing. Dodge out!</li>
+          <li><b class="tip-red">Red lane with arrows</b>: a Shield Rammer is about to charge. Step aside, and it bumps into the wall.</li>
+          <li><b class="tip-purple">Purple circle</b>: a monster is about to appear there.</li>
+        </ul>
         <button class="btn btn--primary" data-act="close">Got it</button>
       </div>`,
     );

@@ -2406,3 +2406,76 @@ body.touch-mode button kbd {
     border-radius: 18px;
   }
 }
+
+/* How to play: four steps, and short warning-sign tips. */
+.howto {
+  grid-template-columns: repeat(4, 1fr);
+}
+
+.howto__tips {
+  display: grid;
+  gap: 6px;
+  margin: 4px 0 0;
+  padding: 0;
+  list-style: none;
+  font: 500 16px/1.4 var(--sans);
+  color: var(--ink);
+}
+
+.tip-red {
+  color: #ff6a6a;
+}
+
+.tip-purple {
+  color: #c98aff;
+}
+
+@media (max-width: 900px) {
+  .howto {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+@media (max-width: 480px) {
+  .howto {
+    grid-template-columns: 1fr;
+  }
+}
+
+.keyrow kbd {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.keys--touch {
+  grid-template-columns: repeat(2, 1fr);
+}
+
+@media (max-width: 640px) {
+  .keys--touch {
+    grid-template-columns: 1fr;
+  }
+
+  /* Steps become compact rows: picture on the left, words on the right. */
+  .howto__step {
+    grid-template-columns: 44px 1fr;
+    justify-items: start;
+    align-items: center;
+    gap: 2px 12px;
+    padding: 10px 12px 10px 14px;
+    text-align: left;
+  }
+
+  .howto__step .howto__art {
+    grid-row: span 2;
+    font-size: 34px;
+  }
+
+  .howto__num {
+    display: none;
+  }
+
+  .howto__tips {
+    font-size: 14px;
+  }
+}
