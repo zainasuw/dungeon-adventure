@@ -160,6 +160,12 @@ export class Game {
   private lastDrag = -10;
   /** Seconds left of the swoop from the menu into the hall; input waits. */
   private introTimer = 0;
+  /** The player's own camera turn (degrees) and zoom, on top of each hall's view. */
+  private camYaw = 0;
+  private camZoom = 1;
+  /** Where the default camera may roam in this scene (keeps the near wall out of view). */
+  private sceneBounds = { minX: -8, maxX: 8, minZ: -8.2, maxZ: 3.6 };
+  private lastDt = 0;
   /** Seconds into walking out through the door. */
   private walkout = 0;
   /** Seconds left holding a hall's establishing shot before the swoop. */
@@ -559,7 +565,8 @@ export class Game {
     if (this.crypt.theme !== index) this.buildHall(index);
     // The camera may roam a bigger or smaller room.
     const c = this.crypt;
-    this.rig.bounds = { minX: -(c.halfX - 8), maxX: c.halfX - 8, minZ: -(c.halfZ - 3.8), maxZ: c.halfZ - 8.4 };
+    this.sceneBounds = { minX: -(c.halfX - 8), maxX: c.halfX - 8, minZ: -(c.halfZ - 3.8), maxZ: c.halfZ - 8.4 };
+    this.rig.bounds = { ...this.sceneBounds };
     this.setMood(MOODS[level.mood]);
     this.crypt.altar.reset();
     this.crypt.altar.setDormantColor(level.crystal);
@@ -592,11 +599,13 @@ export class Game {
     this.hero.animator.play('Idle', { fade: 0 });
     this.renew.left = 0;
     const view = LEVELS[index].view;
-    this.rig.setView(view.yaw, view.pitch, view.distance);
+    this.camYaw = 0;
+    this.rig.setView(view.yaw, view.pitch, view.distance * this.camZoom);
     this.ui.setQuest(index, this.pillars, this.stage);
     this.ui.objective(level.boss ? 'The Skeleton King awakens…' : 'Follow the golden arrow to the altar');
     const delay = intro ? 1.1 : 0;
     this.later(delay + 2.6, () => this.tip('walk', 'Walk with <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> or the arrow keys'));
+    this.later(delay + 9, () => this.tip('camera', 'Look around: hold <kbd>Q</kbd> or <kbd>E</kbd> to turn the camera, scroll to zoom'));
     if (level.boss) this.startBossFight(intro ? 2.4 : 0.8);
     const banner = level.boss
       ? () => this.ui.banner('Final battle', level.hall, 'Defeat the Skeleton King to escape!')
@@ -962,12 +971,20 @@ export class Game {
         }
         return;
       }
-      // Look a little ahead (north), where the altar and the door are.
-      this.rig.update(dt, t, this.camTarget.copy(this.hero.position).setY(0).add(new THREE.Vector3(0, 0, -1.2)));
+      // The hall's view, turned and zoomed by the player. Look a little ahead.
+      const v = LEVELS[this.level].view;
+      this.rig.setView(v.yaw + this.camYaw, v.pitch, v.distance * this.camZoom);
+      // Once the player turns or zooms, keep the hero centred anywhere in the room.
+      const free = Math.abs(this.camYaw) > 4 || this.camZoom < 0.95;
+      const c = this.crypt;
+      this.rig.bounds = free ? { minX: -c.halfX, maxX: c.halfX, minZ: -c.halfZ, maxZ: c.halfZ } : this.sceneBounds;
+      this.rig.axes(this.forward, this.right);
+      this.rig.update(dt, t, this.camTarget.copy(this.hero.position).setY(0).addScaledVector(this.forward, 1.2));
     }
   }
 
   private updatePlay(dt: number): void {
+    this.lastDt = dt;
     if (this.choosing) return;
     this.runTimers(dt);
     if (this.step === 'exiting') {
@@ -1121,7 +1138,12 @@ export class Game {
       k.buttonPressed(0) || k.keyPressed('KeyF') || k.keyPressed('KeyJ') || (holding && inReach && !walking && this.hero.state === 'free');
     this.heroInput.secondary = k.buttonPressed(2) || k.keyPressed('KeyK') || k.keyPressed('KeyG');
     this.heroInput.dodge = k.keyPressed('Space') || k.keyPressed('ShiftLeft');
-    this.heroInput.special = k.keyPressed('KeyQ');
+    this.heroInput.special = k.keyPressed('KeyR');
+    // Turning the camera: hold Q / E, or drag with the middle mouse button. Scroll to zoom.
+    const turn = (k.key('KeyQ') ? 1 : 0) - (k.key('KeyE') ? 1 : 0);
+    this.camYaw += turn * 100 * this.lastDt - k.dragX * 0.35;
+    if (k.wheel) this.camZoom = THREE.MathUtils.clamp(this.camZoom * (1 + k.wheel * 0.08), 0.65, 1.45);
+    if (turn || k.dragX) this.tipsShown.add('camera');
     const pressed = [this.heroInput.attack && k.buttonPressed(0), this.heroInput.secondary, this.heroInput.dodge, this.heroInput.special];
     pressed.forEach((p, i) => {
       if (p && this.hero.cooldowns[i] <= 0 && i > 0) this.ui.pulseSlot(i);

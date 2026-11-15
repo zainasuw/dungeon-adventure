@@ -38,7 +38,7 @@ export interface QuestStats {
 
 export type FloatKind = 'damage' | 'crit' | 'hurt' | 'heal' | 'info' | 'block';
 
-const KEY_LABEL: Record<SlotKey, string> = { LMB: 'F', RMB: 'G', SPACE: 'Space', Q: 'Q' };
+const KEY_LABEL: Record<SlotKey, string> = { LMB: 'F', RMB: 'G', SPACE: 'Space', Q: 'R' };
 
 // Two small drawings of our own for things the icon set lacks.
 const POTION_PATH =
@@ -253,7 +253,9 @@ export class Ui {
           ${key('F', 'Attack, or click (it aims for you)')}
           ${key('G', 'Special move, or right-click')}
           ${key('Space', 'Dodge')}
-          ${key('Q', 'Hero power')}
+          ${key('R', 'Hero power')}
+          ${key('Q / E', 'Turn the camera')}
+          ${key('Scroll', 'Zoom in and out')}
           ${key('H', 'Drink a potion')}
           ${key('Esc', 'Pause')}
         </div>

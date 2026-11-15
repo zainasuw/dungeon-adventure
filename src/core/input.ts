@@ -5,6 +5,10 @@ export class Input {
   /** Pointer position in normalized device coordinates. */
   readonly pointer = new THREE.Vector2();
   pointerActive = false;
+  /** Sideways mouse movement while the middle button is held, since the last frame. */
+  dragX = 0;
+  /** Scroll wheel movement since the last frame (positive = toward the player = zoom out). */
+  wheel = 0;
 
   private readonly down = new Set<string>();
   private readonly pressed = new Set<string>();
@@ -19,6 +23,10 @@ export class Input {
     window.addEventListener('pointerup', this.onPointerUp);
     window.addEventListener('pointermove', this.onPointerMove);
     target.addEventListener('contextmenu', (e) => e.preventDefault());
+    target.addEventListener('wheel', (e) => {
+      e.preventDefault();
+      this.wheel += Math.sign(e.deltaY);
+    }, { passive: false });
   }
 
   key(code: string): boolean {
@@ -47,6 +55,8 @@ export class Input {
 
   /** Call at the end of every frame. */
   endFrame(): void {
+    this.dragX = 0;
+    this.wheel = 0;
     this.pressed.clear();
     this.buttonsPressed.fill(false);
   }
@@ -75,6 +85,7 @@ export class Input {
   };
 
   private onPointerMove = (e: PointerEvent): void => {
+    if (this.buttons[1]) this.dragX += e.movementX;
     this.updatePointer(e);
   };
 
