@@ -6,17 +6,23 @@ A 3D dungeon adventure you play in the browser. Pick a hero, wake the four pilla
 
 ## How to play
 
+You see the dungeon through your hero's eyes. Click the game once, then move the mouse to look around.
+
 | Key | What it does |
 | --- | --- |
-| W A S D or arrow keys | Walk |
+| W A S D | Walk |
+| Mouse, ← → or Q / E | Look around |
 | F or click | Attack (it aims for you; hold to keep swinging) |
 | G or right-click | Special move |
 | Space | Dodge |
-| Q | Hero power |
+| R | Hero power |
 | H | Drink a potion |
+| V | Switch view: first person, behind the hero, or from above |
 | Esc | Pause |
 
-Walk up to the glowing altar to take the pillar, defeat the skeletons it wakes, then follow the golden arrow to the door. Collect all four pillars to win. Easy mode is made for kids.
+Follow the glowing gold marker. Each hall has its own job (light the lanterns, find the lost books, smash the crystals, catch the wisps or hold out), then take the pillar at the altar and beat the skeletons it wakes. Spend your coins at the merchant, pick a blessing, and walk through the golden door. Wake all four pillars, then defeat the Skeleton King to escape. Easy mode is made for kids.
+
+It also plays on tablets and phones (a joystick under your left thumb, buttons on the right) and with a game controller.
 
 ## Heroes
 

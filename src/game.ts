@@ -709,8 +709,8 @@ export class Game {
   }
 
   /**
-   * Progress is not kept between visits: reloading always starts fresh at the
-   * title (Zainab asked for this). Kept as a no-op so it's easy to bring back.
+   * Saves the quest on this device (hall, route, coins, blessings), so the
+   * title can offer Continue. KEEP_PROGRESS turns it off.
    */
   private saveProgress(): void {
     if (!KEEP_PROGRESS) return;
@@ -1682,7 +1682,7 @@ export class Game {
     // The doorway flares with light as the hero steps into it.
     if (this.walkout > 0.4) this.crypt.door.flare(Math.min(1, (this.walkout - 0.4) / 0.6));
     // Halfway into the doorway: choose which hall comes next (not before the King).
-    // The next hall is picked automatically now (Zainab: no "choose your path" stop);
+    // The next hall is picked automatically (no "choose your path" stop);
     // set ASK_PATH to bring the two doors back.
     if (ASK_PATH && before < 0.7 && this.walkout >= 0.7 && !this.pathAsked && this.stage + 2 < this.route.length) {
       this.pathAsked = true;
