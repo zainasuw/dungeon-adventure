@@ -404,7 +404,7 @@ export class Ui {
       `<div class="card card--end card--victory" role="dialog" aria-modal="true" aria-labelledby="win-title">
         <h2 id="win-title" class="card__title card__title--big">You escaped!</h2>
         <p class="card__text">${stats.heroName ? `${escapeHtml(stats.heroName)} the ${stats.hero.name}` : `The ${stats.hero.name}`} woke all four pillars and walked out into the light.</p>
-        ${this.pillarRow(4)}
+        <div class="pillar-row--lightup">${this.pillarRow(4)}</div>
         <div class="stats">
           ${stat('Coins', String(stats.coins))}
           ${stat('Time', formatTime(stats.time))}

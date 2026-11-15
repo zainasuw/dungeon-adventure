@@ -1750,6 +1750,22 @@ export class Game {
     this.crypt.altar.awaken();
     this.audio.play('victory');
     this.ui.showVictory(this.stats());
+    // The four pillars light up one by one on the card; each one sends up a
+    // fountain of its own colour around the hero, then gold rains for a while.
+    PILLARS.forEach((p, i) => {
+      this.later(0.45 + i * 0.4, () => {
+        if (this.phase !== 'victory') return;
+        this.burst(this.hero.position.clone().setY(1.6), new THREE.Color(p.color), 50, 5);
+        this.audio.play('coin');
+      });
+    });
+    for (let k = 0; k < 24; k++) {
+      this.later(2.2 + k * 0.18, () => {
+        if (this.phase !== 'victory') return;
+        const h = this.hero.position;
+        for (let j = 0; j < 6; j++) this.glow.spawn({ x: h.x + (Math.random() - 0.5) * 6, y: 5 + Math.random(), z: h.z + (Math.random() - 0.5) * 4, vy: -1.6 - Math.random(), life: 2.6, size: 0.1, sizeEnd: 0.05, color: this.gold, intensity: 3 });
+      });
+    }
   }
 
   private lose(): void {
@@ -1793,6 +1809,8 @@ export class Game {
     this.updateLineup(dt);
     for (const e of this.enemies) e.updateVisuals(dt);
     this.updateRings();
+    // The victory celebration runs on the same timers as play.
+    if (this.phase === 'victory') this.runTimers(dt);
     if (this.phase === 'select' || this.phase === 'victory') {
       // Back to idle after a cheer.
       if (this.hero.animator.current === 'Cheer' && this.hero.animator.progress >= 1 && this.phase === 'select') {

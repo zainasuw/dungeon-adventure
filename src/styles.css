@@ -2765,3 +2765,40 @@ body.learning .hint {
   color: var(--ink-dim);
   text-align: center;
 }
+
+/* Victory: the four pillars light up one after another. */
+.pillar-row--lightup .pip--lit {
+  animation: pillar-wake 0.5s var(--ease-out) both;
+}
+
+.pillar-row--lightup .pip--lit:nth-child(1) {
+  animation-delay: 0.45s;
+}
+
+.pillar-row--lightup .pip--lit:nth-child(2) {
+  animation-delay: 0.85s;
+}
+
+.pillar-row--lightup .pip--lit:nth-child(3) {
+  animation-delay: 1.25s;
+}
+
+.pillar-row--lightup .pip--lit:nth-child(4) {
+  animation-delay: 1.65s;
+}
+
+@keyframes pillar-wake {
+  from {
+    color: rgba(244, 236, 216, 0.26);
+    transform: scale(0.8);
+  }
+  60% {
+    transform: scale(1.18);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pillar-row--lightup .pip--lit {
+    animation: none;
+  }
+}
