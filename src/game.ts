@@ -100,6 +100,8 @@ const ALTAR_REACH = 3.2;
 /** Save the quest in the browser and offer "Continue"? Off: every visit starts fresh. */
 /** Progress is kept on this device, so closing the tab doesn't lose the quest (Continue on the title). */
 const KEEP_PROGRESS = true;
+/** Show the two-door "choose your path" screen between halls. Off: the route is random. */
+const ASK_PATH = false;
 /** Where the four heroes stand on the select screen. */
 const LINEUP_X = [-3.375, -1.125, 1.125, 3.375];
 const LINEUP_Z = 2.8;
@@ -430,6 +432,13 @@ export class Game {
       slot: (code, down) => (down ? this.input.press(code) : this.input.release(code)),
       isTouch: () => this.input.touchMode && !this.input.padMode,
       isPad: () => this.input.padMode,
+      pauseInfo: () => ({
+        where: LEVELS[this.level].boss ? `Final battle · ${LEVELS[this.level].hall}` : `Hall ${this.stage + 1} of ${PILLAR_HALLS} · ${LEVELS[this.level].hall}`,
+        pillars: this.pillars,
+        coins: this.coins,
+        camera: { first: 'First person', behind: 'Behind hero', top: 'From above' }[this.camStyle],
+      }),
+      cycleCamera: () => this.cycleCamera(false),
     });
 
     window.addEventListener('blur', () => {
@@ -801,7 +810,7 @@ export class Game {
     this.camPitch = 0;
     this.rig.setView(view.yaw, view.pitch, view.distance * this.camZoom);
     this.ui.setQuest(index, this.pillars, this.stage);
-    this.ui.objective(level.boss ? 'The Skeleton King awakens…' : 'Follow the golden arrow to the altar');
+    this.ui.objective(level.boss ? 'The Skeleton King awakens…' : 'Follow the gold marker to the altar');
     if (this.dark > 0) {
       this.applyDarkness();
       this.ui.objective('It\'s dark… Light the torch');
@@ -1207,7 +1216,7 @@ export class Game {
     this.choosing = false;
     this.input.clear();
     this.ui.hideScreen();
-    this.ui.objective('Follow the arrow to the golden door');
+    this.ui.objective('Follow the gold marker to the golden door');
   }
 
   private removeMerchant(): void {
@@ -1521,7 +1530,7 @@ export class Game {
       this.audio.play('clear');
       this.burst(this.crypt.altar.position.clone().setY(2.6), this.gold, 70, 5);
       this.ui.objective('The pillar is awake! Go to the altar');
-      this.ui.hint('The pillar is awake! Follow the arrow to the altar.', 4);
+      this.ui.hint('The pillar is awake! Follow the gold marker to the altar.', 4);
     });
   }
 
@@ -1631,7 +1640,7 @@ export class Game {
     this.ui.banner(
       `Pillar ${this.pillars} of ${PILLAR_HALLS}`,
       `Pillar of ${PILLARS[this.stage]?.name}`,
-      last ? 'All four pillars! The way to the Skeleton King is open' : `${left} more to go! Follow the arrow to the door`,
+      last ? 'All four pillars! The way to the Skeleton King is open' : `${left} more to go! Follow the gold marker to the door`,
     );
     this.later(2.5, () => this.crypt.altar.settle());
     // A reward for clearing the hall, so you're never left without a potion.
@@ -1640,7 +1649,7 @@ export class Game {
       this.dropPotion(at);
       this.burst(at.clone().setY(1), this.heal, 30, 3);
     });
-    this.ui.objective(last ? 'Face the Skeleton King! Follow the arrow to the door' : 'Follow the arrow to the golden door');
+    this.ui.objective(last ? 'Face the Skeleton King! Follow the gold marker to the door' : 'Follow the gold marker to the golden door');
     this.later(2.9, () => this.offerBlessings());
     if (this.hero.state === 'free') this.hero.animator.play('Cheer', { loop: false, fade: 0.15, restart: true });
   }
@@ -1673,7 +1682,9 @@ export class Game {
     // The doorway flares with light as the hero steps into it.
     if (this.walkout > 0.4) this.crypt.door.flare(Math.min(1, (this.walkout - 0.4) / 0.6));
     // Halfway into the doorway: choose which hall comes next (not before the King).
-    if (before < 0.7 && this.walkout >= 0.7 && !this.pathAsked && this.stage + 2 < this.route.length) {
+    // The next hall is picked automatically now (Zainab: no "choose your path" stop);
+    // set ASK_PATH to bring the two doors back.
+    if (ASK_PATH && before < 0.7 && this.walkout >= 0.7 && !this.pathAsked && this.stage + 2 < this.route.length) {
       this.pathAsked = true;
       this.offerPaths();
       return;
@@ -1789,6 +1800,10 @@ export class Game {
     this.mist.update(dt);
 
     this.updateCamera(dt, t);
+    if (this.phase !== 'play') this.ui.waypoint(null);
+    const showAim = this.firstPerson && !this.paused && !this.choosing && this.establishing <= 0 && this.step !== 'exiting' && this.introTimer <= 0;
+    const free = !this.input.touchMode && !this.input.padMode && document.pointerLockElement === null;
+    this.ui.crosshair(!showAim ? 'off' : free ? 'click' : 'aim');
     this.updateFirstPersonBody();
     this.updateViewmodel(dt);
     const capture = this.firstPerson && !this.paused && !this.choosing && !this.input.touchMode;
@@ -1804,6 +1819,22 @@ export class Game {
     this.glow.setScale(h, this.camera.fov);
     this.dust.setScale(h, this.camera.fov);
     if (this.phase === 'play') this.updateWorldUi();
+  }
+
+  /** Switches between first person, behind the hero and the view from above. */
+  private cycleCamera(announce: boolean): void {
+    this.camStyle = this.camStyle === 'first' ? 'behind' : this.camStyle === 'behind' ? 'top' : 'first';
+    this.fpBlend = 0;
+    this.lookYaw = this.hero.facing;
+    if (this.camStyle !== 'first') this.camYaw = THREE.MathUtils.radToDeg(this.lookYaw + Math.PI) - LEVELS[this.level].view.yaw;
+    this.camPitch = 0;
+    try {
+      localStorage.setItem('dungeon-adventure:view', this.camStyle);
+    } catch {
+      // Storage can be off; the choice still works for this visit.
+    }
+    const names = { first: 'through your hero\'s eyes', behind: 'behind your hero', top: 'view from above' };
+    if (announce) this.ui.hint(`Camera: <b>${names[this.camStyle]}</b>. Press <kbd>V</kbd> to switch.`, 2.5);
   }
 
   /** Through the hero's eyes: at eye height, a touch in front of the face, no bobbing. */
@@ -2290,23 +2321,7 @@ export class Game {
     // Turning the camera: hold Q / E, or drag with the middle mouse button. Scroll to zoom.
     // Like Roblox: the left/right arrow keys turn the camera too.
     // Only deliberate turning: Q / E, or a real right-drag (see Input). Arrow keys walk.
-    if (k.keyPressed('KeyV')) {
-      this.camStyle = this.camStyle === 'first' ? 'behind' : this.camStyle === 'behind' ? 'top' : 'first';
-      this.fpBlend = 0;
-      this.lookYaw = this.hero.facing;
-      if (this.camStyle !== 'first') {
-        // Carry the direction you were looking into the other views.
-        this.camYaw = THREE.MathUtils.radToDeg(this.lookYaw + Math.PI) - LEVELS[this.level].view.yaw;
-      }
-      try {
-        localStorage.setItem('dungeon-adventure:view', this.camStyle);
-      } catch {
-        // Storage can be off; the choice still works for this visit.
-      }
-      this.camPitch = 0;
-      const names = { first: 'through your hero\'s eyes', behind: 'behind your hero', top: 'view from above' };
-      this.ui.hint(`Camera: <b>${names[this.camStyle]}</b>. Press <kbd>V</kbd> to switch.`, 2.5);
-    }
+    if (k.keyPressed('KeyV')) this.cycleCamera(true);
     const turn = fp ? 0 : (k.key('KeyQ') ? 1 : 0) - (k.key('KeyE') ? 1 : 0) - k.look.x;
     // Dragging with the right (or middle) button up and down tilts the view (or a controller's right stick).
     if (!fp) {
@@ -2703,7 +2718,7 @@ export class Game {
         this.audio.play('cast');
         this.later(0.2, () => this.audio.play('clear'));
         this.burst(b.position.clone().setY(1.4), this.fireColor, 60, 4);
-        this.ui.objective('Follow the golden arrow to the altar');
+        this.ui.objective('Follow the gold marker to the altar');
         this.later(0.8, () => this.ui.banner(`Hall 1 of ${PILLAR_HALLS}`, LEVELS[this.level].hall, `Guarding the Pillar of ${PILLARS[0].name}`));
       }
       return;
@@ -2995,7 +3010,7 @@ export class Game {
     this.ui.hideScreen();
     this.ui.setHero(hero.def, this.heroName, hero.maxHp);
     this.ui.setQuest(this.level, this.pillars, this.stage);
-    this.ui.objective('Follow the arrow to the golden door');
+    this.ui.objective('Follow the gold marker to the golden door');
     this.ui.setBlessings(this.blessings, BLESSINGS);
     this.ui.setCoins(this.coins, false);
     this.audio.play('start');

@@ -22,6 +22,10 @@ export interface UiHandlers {
   changeHero(): void;
   toggleMute(): boolean;
   pause(): void;
+  /** What the pause menu shows: where you are, pillars, coins, and the current view's name. */
+  pauseInfo(): { where: string; pillars: number; coins: number; camera: string };
+  /** Switch to the next camera view (first person, behind, from above). */
+  cycleCamera(): void;
   /** An action button on screen was pressed or let go (touch, or a mouse click on it). */
   slot(code: string, down: boolean): void;
   isTouch(): boolean;
@@ -246,10 +250,12 @@ export class Ui {
   /** Pins each hero's name tag and click area to where the 3D hero stands. */
   placeHeroTags(tags: { id: HeroClassId; x: number; top: number; bottom: number }[]): void {
     if (this.screenName !== 'select') return;
+    // One straight row of name tags, even when a hero steps forward.
+    const floor = Math.max(...tags.map((t) => t.bottom));
     for (const t of tags) {
       const b = this.screen.querySelector<HTMLElement>(`[data-hero="${t.id}"]`);
       if (!b) continue;
-      const height = Math.max(60, t.bottom - t.top);
+      const height = Math.max(60, floor - t.top);
       b.style.transform = `translate(${t.x}px, ${t.top}px) translateX(-50%)`;
       b.style.height = `${height}px`;
       b.style.width = `${Math.max(110, height * 0.55)}px`;
@@ -266,10 +272,10 @@ export class Ui {
       `<div class="card card--wide" role="dialog" aria-modal="true" aria-labelledby="howto-title">
         <h2 id="howto-title" class="card__title">How to play</h2>
         <ol class="howto">
-          ${step(1, 'Do the hall\'s job', 'Follow the golden arrow. Each hall has a job: light lanterns, find books, smash crystals, catch wisps or hold out.', iconByName('starSwirl', 'icon icon--gold'))}
+          ${step(1, 'Do the hall\'s job', 'Follow the golden marker. Each hall has a job, like lighting lanterns or finding books.', iconByName('starSwirl', 'icon icon--gold'))}
           ${step(2, 'Take the pillar', 'Walk up to the glowing altar. The skeletons wake up: beat them all!', icon(PILLAR_PATH, 'icon icon--gold'))}
           ${step(3, 'Power up', 'Pick a blessing, and spend your coins at the merchant.', iconByName('holySymbol', 'icon icon--gold'))}
-          ${step(4, 'Pick a door', 'Choose which hall comes next. Each door shows its reward.', iconByName('teleport', 'icon icon--gold'))}
+          ${step(4, 'Through the door', 'Walk into the golden door. A new hall waits, different every game.', iconByName('teleport', 'icon icon--gold'))}
         </ol>
         <p class="howto__goal">Wake all <b>4 pillars</b>, then beat the <b>Skeleton King</b> to escape!</p>
         ${
@@ -320,19 +326,34 @@ export class Ui {
   showPause(): void {
     this.setScreen(
       'pause',
-      `<div class="card" role="dialog" aria-modal="true" aria-labelledby="pause-title">
+      (() => {
+        const info = this.handlers.pauseInfo();
+        return `<div class="card card--pause" role="dialog" aria-modal="true" aria-labelledby="pause-title">
+        <p class="kicker">${info.where}</p>
         <h2 id="pause-title" class="card__title">Paused</h2>
+        ${this.pillarRow(info.pillars)}
+        <p class="pause__coins"><span class="coin-icon" aria-hidden="true"></span><b>${info.coins}</b> coins</p>
         <div class="stack">
           <button class="btn btn--primary" data-act="resume">Resume</button>
+          <div class="pause__row">
+            <button class="btn btn--setting" data-act="camera"><span>View</span><b>${info.camera}</b></button>
+            <button class="btn btn--setting" data-act="mute" aria-pressed="${!this.muted}"><span>Sound</span><b>${this.muted ? 'Off' : 'On'}</b></button>
+          </div>
           <button class="btn" data-act="howto">How to play</button>
-          <button class="btn" data-act="mute">${this.muted ? 'Sound: off' : 'Sound: on'}</button>
           <button class="btn" data-act="restart">Restart this hall</button>
           <button class="btn btn--ghost" data-act="quit">Save and quit to title</button>
         </div>
-      </div>`,
+        <p class="pause__hint">Press <kbd>Esc</kbd> to keep playing</p>
+      </div>`;
+      })(),
     );
     this.on('resume', () => this.handlers.resume());
     this.on('howto', () => this.showHowTo(() => this.showPause()));
+    this.on('camera', () => {
+      this.handlers.cycleCamera();
+      this.showPause();
+      this.focusFirst('[data-act="camera"]');
+    });
     this.on('mute', () => {
       this.muted = this.handlers.toggleMute();
       this.showPause();
@@ -350,7 +371,7 @@ export class Ui {
       `<div class="card card--end" role="dialog" aria-modal="true" aria-labelledby="go-title">
         <p class="kicker kicker--blood">Defeated</p>
         <h2 id="go-title" class="card__title">${escapeHtml(stats.heroName || `The ${stats.hero.name}`)} fell in ${hall}</h2>
-        <p class="card__text">Don't give up! You keep your ${stats.pillars} ${stats.pillars === 1 ? 'pillar' : 'pillars'} and start this hall fresh.</p>
+        <p class="card__text">${stats.pillars ? `Don't give up! You keep your ${stats.pillars} ${stats.pillars === 1 ? 'pillar' : 'pillars'} and start this hall fresh.` : 'Don\'t give up! Try this hall again, fresh and full of health.'}</p>
         ${this.pillarRow(stats.pillars)}
         <div class="stack">
           <button class="btn btn--primary" data-act="retry">Try again</button>
@@ -410,7 +431,7 @@ export class Ui {
       .join('');
     this.setScreen(
       'bless',
-      `<div class="bless-wrap" role="dialog" aria-modal="true" aria-labelledby="bless-title">
+      `<div class="bless-wrap" role="dialog" aria-modal="true" aria-labelledby="bless-title" tabindex="-1">
         <p class="kicker">The pillar blesses you</p>
         <h2 id="bless-title" class="card__title card__title--big">Choose a blessing</h2>
         <div class="bless-row">${cards}</div>
@@ -425,7 +446,8 @@ export class Ui {
     };
     this.blessPick = pick;
     this.screen.querySelectorAll<HTMLButtonElement>('.bless').forEach((el) => el.addEventListener('click', () => pick(Number(el.dataset.i))));
-    this.focusFirst('.bless');
+    // Focus the dialog itself: a focused first card looked as if it was already picked.
+    this.focusFirst('.bless-wrap');
   }
 
   /**
@@ -491,12 +513,12 @@ export class Ui {
       .join('');
     this.setScreen(
       'shop',
-      `<div class="bless-wrap shop-wrap" role="dialog" aria-modal="true" aria-labelledby="shop-title">
+      `<div class="bless-wrap shop-wrap" role="dialog" aria-modal="true" aria-labelledby="shop-title" tabindex="-1">
         <p class="kicker">The travelling merchant</p>
         <h2 id="shop-title" class="card__title card__title--big">Spend your coins</h2>
-        <p class="shop-purse">You have <i class="coin-dot"></i><b>${coins}</b> coins</p>
+        <p class="shop-purse"><i class="coin-dot"></i><b>${coins}</b> coins to spend</p>
         <div class="bless-row shop-row" style="--n:${items.length}">${cards}</div>
-        <button type="button" class="btn btn--ghost shop-leave">Done shopping</button>
+        <button type="button" class="btn shop-leave">Done shopping</button>
         <p class="bless-help">Press <kbd>1</kbd>–<kbd>${items.length}</kbd> to buy, <kbd>Esc</kbd> when you're done</p>
       </div>`,
     );
@@ -511,12 +533,22 @@ export class Ui {
     this.shopLeave = onLeave;
     this.screen.querySelectorAll<HTMLButtonElement>('.shop-item').forEach((el) => el.addEventListener('click', () => this.blessPick?.(Number(el.dataset.i))));
     this.screen.querySelector('.shop-leave')!.addEventListener('click', () => onLeave());
-    this.focusFirst('.shop-item:not([aria-disabled]), .shop-leave');
+    this.focusFirst('.shop-wrap');
   }
 
   private shopLeave: (() => void) | null = null;
 
   private waypointEl: HTMLElement | null = null;
+  private crossEl: HTMLElement | null = null;
+
+  /** First person: a small dot in the middle (where you're aiming), and a reminder to click when the mouse is free. */
+  crosshair(state: 'off' | 'aim' | 'click'): void {
+    if (!this.crossEl) {
+      this.crossEl = el('div', 'crosshair', '<span class="crosshair__dot"></span><span class="crosshair__text">Click to look around</span>');
+      this.root.append(this.crossEl);
+    }
+    this.crossEl.dataset.state = state;
+  }
 
   /** The floating "go here" marker in first person, or null to hide it. */
   waypoint(w: { x: number; y: number; off: boolean; angle: number; label: string; color: string } | null): void {

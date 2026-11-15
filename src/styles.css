@@ -2561,3 +2561,125 @@ body.touch-mode button kbd {
     animation: none;
   }
 }
+
+/* ───────────── Pause menu ───────────── */
+
+.card--pause {
+  width: min(420px, calc(100vw - 32px));
+}
+
+.card--pause .pillar-row {
+  margin: 2px 0 0;
+}
+
+.pause__coins {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  margin: 0;
+  font: 600 16px var(--sans);
+  color: var(--ink-dim);
+}
+
+.pause__coins b {
+  color: #ffd76a;
+  font-size: 18px;
+}
+
+/* Two settings side by side: what it is on top, its value below. */
+.pause__row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.btn--setting {
+  display: grid;
+  gap: 2px;
+  padding-top: 10px;
+  padding-bottom: 10px;
+  line-height: 1.15;
+}
+
+.btn--setting span {
+  font: 600 12px var(--sans);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-dim);
+}
+
+.btn--setting b {
+  font-size: 17px;
+}
+
+.pause__hint {
+  margin: 4px 0 0;
+  font: 500 14px var(--sans);
+  color: var(--ink-dim);
+  text-align: center;
+}
+
+/* ───────────── Shop: a clear purse and a real "done" button ───────────── */
+
+.shop-purse {
+  padding: 8px 18px;
+  border: 1px solid rgba(255, 210, 58, 0.35);
+  border-radius: 999px;
+  background: rgba(255, 210, 58, 0.1);
+  font-size: 18px;
+}
+
+.shop-purse b {
+  color: #ffd76a;
+  font-size: 22px;
+}
+
+.shop-leave {
+  min-width: 220px;
+}
+
+/* Dialog containers take focus quietly. */
+.bless-wrap:focus {
+  outline: none;
+}
+
+/* ───────────── First-person aim dot ───────────── */
+
+.crosshair {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  z-index: 2;
+  display: grid;
+  justify-items: center;
+  gap: 10px;
+  transform: translate(-50%, -4px);
+  pointer-events: none;
+}
+
+.crosshair[data-state='off'] {
+  display: none;
+}
+
+.crosshair__dot {
+  width: 8px;
+  height: 8px;
+  border: 2px solid rgba(0, 0, 0, 0.55);
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.9);
+}
+
+.crosshair__text {
+  display: none;
+  padding: 6px 14px;
+  border-radius: 999px;
+  background: rgba(10, 9, 14, 0.75);
+  font: 600 15px var(--sans);
+  color: #fff;
+  white-space: nowrap;
+}
+
+.crosshair[data-state='click'] .crosshair__text {
+  display: block;
+}

@@ -13,7 +13,10 @@ const tip = document.getElementById('loading-tip')!;
 const TIPS = [
   'Tip: hold <b>F</b> to keep swinging.',
   'Tip: a red ring means a skeleton is about to swing. Press <b>Space</b> to dodge!',
-  'Tip: follow the golden arrow on the floor.',
+  'Tip: follow the glowing gold marker to know where to go.',
+  'Tip: click the game, then move the mouse to look around.',
+  'Tip: spend your coins at the merchant after each hall.',
+  'Tip: press <b>V</b> to switch the camera view.',
   'Tip: press <b>H</b> to drink a potion.',
   'Tip: Easy mode is perfect for kids.',
 ];
