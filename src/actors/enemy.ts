@@ -117,6 +117,8 @@ export interface EnemyContext {
   others: readonly Enemy[];
   strike(enemy: Enemy): void;
   shoot(enemy: Enemy, direction: THREE.Vector3): void;
+  /** True if this monster may start an attack now (only a few attack at once). */
+  mayAttack(enemy: Enemy): boolean;
   /** Which way to walk to reach the hero around obstacles, or null to go straight. */
   path(position: THREE.Vector3, out: THREE.Vector3): THREE.Vector3 | null;
 }
@@ -129,6 +131,8 @@ export class Enemy extends Character {
   deadTime = 0;
   /** 0..1 while winding up a blow; drives the red warning ring. */
   telegraph = 0;
+  /** A tougher, glowing champion: bigger, more health, always drops a reward. */
+  elite = false;
   /** Which way it slides around obstacles: 1 or -1. */
   slide = Math.random() < 0.5 ? 1 : -1;
   /** Seconds left of being stunned by a heavy hit. */
@@ -151,6 +155,15 @@ export class Enemy extends Character {
     for (const w of def.weapons) this.hold(assets.weapon(w.item), w.hand, w.flip, w.tilt);
     this.setGlow((n) => n.endsWith('_Eyes'), def.eyes, 4);
     this.cooldown = 0.6 + Math.random() * 0.8;
+  }
+
+  /** Turns this monster into an elite champion. */
+  makeElite(hpBoost: number): void {
+    this.elite = true;
+    this.maxHp = this.hp = Math.round(this.maxHp * hpBoost);
+    this.model.scale.multiplyScalar(1.22);
+    this.radius *= 1.15;
+    this.setGlow((n) => n.endsWith('_Eyes'), '#ffd23a', 7);
   }
 
   get active(): boolean {
@@ -253,7 +266,7 @@ export class Enemy extends Character {
       const dir = this.toTarget.clone().divideScalar(Math.max(dist, 0.001));
       if (dist > def.ranged.keepAway + 1.5) this.steer.copy(ctx.path(this.position, this.route) ?? dir);
       else if (dist < def.ranged.keepAway - 1.5) this.steer.copy(dir).negate();
-      if (dist < def.reach && this.cooldown <= 0) return this.startAttack(dir);
+      if (dist < def.reach && this.cooldown <= 0 && ctx.mayAttack(this)) return this.startAttack(dir);
     } else {
       if (dist > def.reach * 0.8) {
         // Far away: follow the walking map around pillars; close up: go straight in.
@@ -261,7 +274,12 @@ export class Enemy extends Character {
         if (around) this.steer.copy(around);
         else this.steer.copy(this.toTarget).divideScalar(Math.max(dist, 0.001));
       }
-      if (dist < def.reach && this.cooldown <= 0) return this.startAttack(this.toTarget.clone().divideScalar(Math.max(dist, 0.001)));
+      if (dist < def.reach && this.cooldown <= 0) {
+        if (ctx.mayAttack(this)) return this.startAttack(this.toTarget.clone().divideScalar(Math.max(dist, 0.001)));
+        // Waiting for a turn: step around the hero instead of crowding in.
+        this.steer.set(-this.toTarget.z, 0, this.toTarget.x).normalize().multiplyScalar(this.slide * 0.6);
+        if (dist < def.reach * 0.7) this.steer.addScaledVector(this.toTarget, -0.6 / Math.max(dist, 0.001));
+      }
     }
 
     // Keep a little space from the others so they surround instead of stacking.

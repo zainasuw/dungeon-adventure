@@ -605,7 +605,7 @@ export class Game {
     this.waveCooldown = 4;
   }
 
-  private spawnWave(kinds: EnemyKind[]): void {
+  private spawnWave(kinds: EnemyKind[], eliteFirst = false): void {
     const points = [...this.crypt.spawnPoints]
       .filter((p) => p.distanceTo(this.hero.position) > 4.5)
       .sort(() => Math.random() - 0.5);
@@ -613,6 +613,10 @@ export class Game {
       const at = points[i % points.length].clone().add(new THREE.Vector3((Math.random() - 0.5) * 1.5, 0, (Math.random() - 0.5) * 1.5));
       this.later(i * 0.4, () => {
         const enemy = this.spawnEnemy(kind, at);
+        if (eliteFirst && i === 0) {
+          enemy.makeElite(this.difficulty.id === 'easy' ? 1.5 : 2.2);
+          this.floatAt(at, 3, 'Elite!', 'crit');
+        }
         enemy.facing = Math.atan2(this.hero.position.x - at.x, this.hero.position.z - at.z);
         enemy.rise(true);
         this.puff(at, 22);
@@ -855,7 +859,8 @@ export class Game {
       if (this.waves.length > 0 && living.every((e) => e.state !== 'dormant')) {
         this.waveCooldown -= dt;
         if (this.waveCooldown <= 0 && awake.length <= 1) {
-          this.spawnWave(this.waves.shift()!);
+          const lastWave = this.waves.length === 1;
+          this.spawnWave(this.waves.shift()!, lastWave);
           this.waveCooldown = 3;
         }
       }
@@ -956,6 +961,7 @@ export class Game {
       strike: (e: Enemy) => this.enemyStrike(e),
       shoot: (e: Enemy, dir: THREE.Vector3) => this.enemyShoot(e, dir),
       path: (pos: THREE.Vector3, out: THREE.Vector3) => this.nav.direction(pos, out),
+      mayAttack: (e: Enemy) => this.mayAttack(e),
     };
     // Refresh the walking map toward the hero a few times a second.
     this.navTimer -= dt;
@@ -1121,7 +1127,11 @@ export class Game {
     this.audio.play('bones');
     this.puff(e.position, 18);
     this.burst(e.position.clone().setY(1), this.gold, 18, 3);
-    if (Math.random() < this.difficulty.potionDrop) {
+    if (e.elite) {
+      this.burst(e.position.clone().setY(1.2), this.gold, 50, 5);
+      this.shake(0.3);
+      this.later(0.5, () => this.dropPotion(e.position.clone().setY(0)));
+    } else if (Math.random() < this.difficulty.potionDrop) {
       this.later(0.5, () => this.dropPotion(e.position.clone().setY(0)));
     }
   }
@@ -1154,6 +1164,17 @@ export class Game {
       }
     }
     return best;
+  }
+
+  /**
+   * Attack tickets: only a few monsters may swing at once (one on Easy), the
+   * rest circle and wait. Fights stay readable and fair even with a crowd.
+   */
+  private mayAttack(e: Enemy): boolean {
+    const limit = this.difficulty.id === 'easy' ? 1 : this.difficulty.id === 'normal' ? 2 : 3;
+    let busy = 0;
+    for (const o of this.enemies) if (o !== e && o.alive && (o.state === 'windup' || o.state === 'recover')) busy++;
+    return busy < limit;
   }
 
   /** Spike traps: a sharp poke and a hop back if the hero steps on one. */
