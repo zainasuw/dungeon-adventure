@@ -1364,7 +1364,7 @@ kbd {
 
 .hint {
   position: absolute;
-  bottom: 132px;
+  bottom: calc(var(--dock-top, 120px) + 12px);
   left: 50%;
   z-index: 3;
   display: flex;
@@ -1627,9 +1627,19 @@ kbd {
     display: none;
   }
 
+  /* Under the hero plate, never where tips and the thumb buttons are. */
   .quest {
-    top: auto;
-    bottom: 128px;
+    top: calc(var(--plate-h, 100px) + 10px);
+    bottom: auto;
+    gap: 4px;
+  }
+
+  .quest__hall {
+    font-size: 12px;
+  }
+
+  .quest__pillars {
+    font-size: 26px;
   }
 
   .quest__objective {
@@ -2174,7 +2184,7 @@ body.touch-mode .dock .slot:active {
 
 /* Tips sit higher, clear of the thumbs. */
 body.touch-mode .hint {
-  bottom: 170px;
+  bottom: calc(var(--dock-top, 160px) + 12px);
 }
 
 body.touch-mode button kbd {
@@ -2374,7 +2384,7 @@ body.touch-mode button kbd {
   }
 
   body.touch-mode .hint {
-    bottom: 150px;
+    bottom: calc(var(--dock-top, 140px) + 10px);
   }
 
   .banner__title {
@@ -2751,7 +2761,7 @@ body.learning .dock .slot__name {
 }
 
 body.learning .hint {
-  bottom: 150px;
+  bottom: calc(var(--dock-top, 150px) + 12px);
 }
 
 /* The marker alone shows the way; a distance in metres means little to a young player. */
@@ -2800,5 +2810,147 @@ body.learning .hint {
 @media (prefers-reduced-motion: reduce) {
   .pillar-row--lightup .pip--lit {
     animation: none;
+  }
+}
+
+/* ───────────── Menus over the game ───────────── */
+
+/* While a card is up, the thumb controls are gone: nothing under it can walk or swing. */
+body.menu-open .dock,
+body.menu-open .touch-stick,
+body.menu-open .crosshair {
+  visibility: hidden;
+}
+
+/* Phones held sideways: a short, wide pause card that needs no scrolling. */
+@media (max-height: 480px) {
+  .screen--pause,
+  .screen--howto,
+  .screen--gameover,
+  .screen--victory {
+    padding: 10px;
+  }
+
+  .card {
+    max-height: calc(100vh - 20px);
+    gap: 10px;
+    padding: 14px 18px;
+  }
+
+  .card__title {
+    font-size: 24px;
+  }
+
+  .card--pause {
+    width: min(620px, calc(100vw - 20px));
+  }
+
+  .card--pause .pillar-row,
+  .card--pause .pause__coins,
+  .card--pause .card__sub {
+    display: none;
+  }
+
+  .card--pause .stack {
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+  }
+
+  .card--pause .stack > [data-act='resume'] {
+    grid-column: 1 / -1;
+  }
+
+  .card--pause .pause__row {
+    grid-column: 1 / -1;
+  }
+
+  .card--pause .pause__hint {
+    margin: 0;
+  }
+
+  .card--end .card__tip {
+    display: none;
+  }
+
+  .card--end .stack {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .card--end .stack > .btn--primary {
+    grid-column: 1 / -1;
+  }
+
+  .quest__objective {
+    font-size: 14px;
+    padding: 6px 14px;
+  }
+
+  /* Sideways phone: the objective sits top right, beside the pause button, so the
+     middle of the screen and the tip above the buttons stay clear. */
+  .quest {
+    top: 10px;
+    left: auto;
+    right: 76px;
+    transform: none;
+    justify-items: end;
+    gap: 2px;
+    text-align: right;
+  }
+
+  .quest__hall {
+    font-size: 11px;
+  }
+
+  .quest__pillars {
+    font-size: 20px;
+  }
+
+  .plate__passive {
+    display: none;
+  }
+
+  .hint {
+    display: block;
+    font-size: 15px;
+    padding: 8px 14px;
+    max-width: min(560px, calc(100vw - 32px));
+    white-space: normal;
+  }
+
+  .hint kbd {
+    margin: 0 2px;
+  }
+}
+
+/* Tablets and short laptops: a shorter hero card, so the heroes stand above it. */
+@media (min-width: 901px) and (max-height: 900px) {
+  .pick-card {
+    bottom: 12px;
+    gap: 20px;
+    padding: 12px 20px;
+  }
+
+  .pick-card__info {
+    grid-template-columns: minmax(0, 1fr) minmax(200px, 0.8fr);
+    grid-template-areas: 'name stats';
+    row-gap: 0;
+  }
+
+  .pick-card__blurb,
+  .pick-card__power {
+    display: none;
+  }
+
+  .pick-card__name {
+    font-size: 28px;
+    margin: 0;
+  }
+
+  .pick-card__hint {
+    display: none;
+  }
+
+  .pick-card__start {
+    gap: 6px;
   }
 }

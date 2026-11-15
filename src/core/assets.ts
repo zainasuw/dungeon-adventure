@@ -54,6 +54,15 @@ export class Assets {
       if (o instanceof THREE.Mesh) this.outdoorMaterials.add(o.material as THREE.Material);
     });
     for (const child of weapons.scene.children) this.weapons.set(child.name, child);
+    // Everything in the library is shared: a clone of a piece must never dispose it.
+    for (const scene of [kit.scene, outdoor.scene, weapons.scene, ...characters.map((c) => c.scene)]) {
+      scene.traverse((o) => {
+        if (o instanceof THREE.Mesh) {
+          o.geometry.userData.shared = true;
+          for (const m of Array.isArray(o.material) ? o.material : [o.material]) m.userData.shared = true;
+        }
+      });
+    }
     for (const clip of heroAnims.animations) this.heroClips.set(clip.name, inPlace(clip));
     for (const clip of skeletonAnims.animations) this.skeletonClips.set(clip.name, inPlace(clip));
     names.forEach((name, i) => this.characters.set(name, characters[i].scene));

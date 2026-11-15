@@ -251,10 +251,13 @@ export class Ui {
     if (this.screenName !== 'select') return;
     // One straight row of name tags, even when a hero steps forward.
     const floor = Math.max(...tags.map((t) => t.bottom));
+    // The name tags hang below the hit area; keep them clear of the info card.
+    const card = this.screen.querySelector<HTMLElement>('.pick-card')?.getBoundingClientRect();
+    const limit = card ? card.top - 58 : Infinity;
     for (const t of tags) {
       const b = this.screen.querySelector<HTMLElement>(`[data-hero="${t.id}"]`);
       if (!b) continue;
-      const height = Math.max(60, floor - t.top);
+      const height = Math.max(60, Math.min(floor, limit) - t.top);
       b.style.transform = `translate(${t.x}px, ${t.top}px) translateX(-50%)`;
       b.style.height = `${height}px`;
       b.style.width = `${Math.max(110, height * 0.55)}px`;
@@ -332,7 +335,7 @@ export class Ui {
           <button class="btn" data-act="restart">Restart this hall</button>
           <button class="btn btn--ghost" data-act="quit">Back to title</button>
         </div>
-        <p class="pause__hint">Press <kbd>Esc</kbd> to keep playing</p>
+        <p class="pause__hint">${this.handlers.isPad() ? 'Press <kbd>Start</kbd> or <kbd>B</kbd> to keep playing' : this.handlers.isTouch() ? 'Tap <b>Resume</b> to keep playing' : 'Press <kbd>Esc</kbd> to keep playing'}</p>
       </div>`;
       })(),
     );
@@ -625,6 +628,7 @@ export class Ui {
     this.screen.className = 'screen-layer';
     this.screen.innerHTML = '';
     this.overlayReturn = null;
+    document.body.classList.remove('menu-open');
   }
 
   get screenName(): string {
@@ -641,7 +645,7 @@ export class Ui {
     }
     if (!this.handlers.isTouch()) return html;
     if (html.includes('<kbd>W</kbd>')) return 'Walk: put your thumb on the <b>left side</b> of the screen and slide it';
-    if (html.includes('<kbd>Q</kbd>')) return 'Tap the <b>right side</b> of the screen to attack';
+    if (html.includes('<kbd>Q</kbd>')) return 'Look around: <b>drag on the right side</b> of the screen. A quick tap there attacks';
     const names: Record<string, string> = { F: 'Attack', J: 'Attack', G: 'Special', Space: 'Dodge', R: 'Power', H: 'Potion', K: 'Special' };
     return html.replace(/<kbd>([A-Za-z]+)<\/kbd>/g, (m, k: string) => (names[k] ? `<kbd>${names[k]}</kbd>` : m)).replace(/Press /g, 'Tap ').replace(/press /g, 'tap ');
   }
@@ -730,6 +734,7 @@ export class Ui {
         </div>
       </div>`;
     this.hud.querySelector('[data-act="pause"]')!.addEventListener('click', () => this.handlers.pause());
+    this.watchHudSize();
     // The action buttons work as buttons too (big thumb buttons on touch screens).
     const codes = [...def.abilities.map((a) => SLOT_CODE[a.key]), 'KeyH'];
     this.hud.querySelectorAll<HTMLElement>('.dock .slot').forEach((slot, i) => {
@@ -880,6 +885,34 @@ export class Ui {
     ).join('')}</div>`;
   }
 
+  private hudWatcher: ResizeObserver | null = null;
+
+  /**
+   * Publishes the height of the action bar (with its labels) and the hero plate as
+   * CSS variables, so tips sit just above the buttons and the objective just
+   * under the plate on every screen size, instead of a fixed distance.
+   */
+  private watchHudSize(): void {
+    this.hudWatcher?.disconnect();
+    const dock = this.hud.querySelector<HTMLElement>('.dock');
+    const plate = this.hud.querySelector<HTMLElement>('.plate');
+    if (!dock || !plate) return;
+    const measure = (): void => {
+      let top = dock.getBoundingClientRect().top;
+      for (const n of dock.querySelectorAll<HTMLElement>('.slot__name')) {
+        if (getComputedStyle(n).display !== 'none') top = Math.min(top, n.getBoundingClientRect().top);
+      }
+      const root = document.documentElement.style;
+      root.setProperty('--dock-top', `${Math.max(0, Math.round(window.innerHeight - top))}px`);
+      root.setProperty('--plate-h', `${Math.round(plate.getBoundingClientRect().bottom)}px`);
+    };
+    measure();
+    this.hudWatcher = new ResizeObserver(measure);
+    this.hudWatcher.observe(dock);
+    this.hudWatcher.observe(plate);
+    this.hudWatcher.observe(document.body);
+  }
+
   private pickHero(id: HeroClassId, preview = true, loud = true): void {
     this.selectState.hero = id;
     const c = HERO_CLASSES[id];
@@ -953,6 +986,8 @@ export class Ui {
     this.bannerEl.classList.remove('banner--show');
     this.screen.className = `screen-layer screen-layer--on screen--${name}`;
     this.screen.innerHTML = html;
+    // The thumb controls go away while a menu is up: nothing under a card should walk or swing.
+    document.body.classList.add('menu-open');
   }
 
   private on(act: string, fn: () => void): void {
@@ -967,6 +1002,8 @@ export class Ui {
     const back = this.overlayReturn;
     this.overlayReturn = null;
     back?.();
+    // Back where the player was: on the "How to play" button they pressed.
+    this.focusFirst('[data-act="howto"]');
   }
 
   private onKey = (e: KeyboardEvent): void => {
@@ -999,6 +1036,16 @@ export class Ui {
     const left = e.key === 'ArrowLeft' || e.code === 'KeyA';
     if (name === 'select' && (right || left)) {
       e.preventDefault();
+      const inSeg = e.target instanceof HTMLElement && e.target.closest('.seg');
+      if (inSeg && e.target instanceof HTMLButtonElement && e.target.dataset.diff) {
+        // On the difficulty switch the arrows move along it, like a radio group.
+        const ids = Object.keys(DIFFICULTIES) as DifficultyId[];
+        const i = ids.indexOf(e.target.dataset.diff as DifficultyId);
+        const next = ids[(i + (right ? 1 : -1) + ids.length) % ids.length];
+        this.pickDifficulty(next);
+        this.screen.querySelector<HTMLElement>(`[data-diff="${next}"]`)?.focus({ preventScroll: true });
+        return;
+      }
       this.stepHero(right ? 1 : -1);
       this.screen.querySelector<HTMLElement>('[data-act="start"]')?.focus({ preventScroll: true });
     } else if (name === 'title' && e.key === 'Enter' && !(e.target instanceof HTMLButtonElement)) {

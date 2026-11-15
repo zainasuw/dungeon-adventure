@@ -1,5 +1,8 @@
 import * as THREE from 'three';
 
+/** Which kind of controls the player used last: keyboard and mouse, a touch screen, or a game controller. */
+export type InputMode = 'kbm' | 'touch' | 'pad';
+
 /** Keyboard and mouse state, polled once per frame by the game. */
 export class Input {
   /** Pointer position in normalized device coordinates. */
@@ -22,23 +25,32 @@ export class Input {
    * lands, as in Brawl Stars and Archero). x = right, y = forward, length 0..1.
    */
   readonly stick = new THREE.Vector2();
-  /** True once the player has touched the screen; the HUD switches to big thumb buttons. */
-  touchMode = false;
+  /** The controls used last. Prompts and the HUD follow it. */
+  mode: InputMode = 'kbm';
+  /** True while the player is on touch controls; the HUD shows big thumb buttons. */
+  get touchMode(): boolean {
+    return this.mode === 'touch';
+  }
+  /** True while a game controller is being used. */
+  get padMode(): boolean {
+    return this.mode === 'pad';
+  }
   private stickId: number | null = null;
   /** First-person looking since the last frame: mouse (when locked) or a dragging thumb, in pixels. */
   lookDX = 0;
   lookDY = 0;
   /** In first person a click captures the mouse so moving it looks around (like Minecraft). */
   wantsPointerLock = false;
+  /** Set when the browser refused the last pointer lock request (e.g. Chrome's pause after Esc). */
+  lockRefused = false;
   private lookId: number | null = null;
   private lookTravel = 0;
   /** Right stick of a game controller: turns (x) and tilts (y) the camera. */
   readonly look = new THREE.Vector2();
-  /** True once a game controller button has been pressed. */
-  padMode = false;
   private padPrev: boolean[] = [];
   private padStick = false;
   private padRepeat = 0;
+  private readonly padCodes = ['KeyF', 'KeyG', 'Space', 'KeyR', 'KeyH', 'Escape'];
   private readonly stickOrigin = new THREE.Vector2();
   private readonly stickBase: HTMLElement;
   private readonly stickKnob: HTMLElement;
@@ -52,15 +64,31 @@ export class Input {
   constructor(private readonly target: HTMLElement) {
     window.addEventListener('keydown', this.onKeyDown);
     window.addEventListener('keyup', this.onKeyUp);
+    // Anything that takes the player away forgets every held input: nothing may keep
+    // walking or swinging while the window isn't theirs.
     window.addEventListener('blur', this.reset);
+    window.addEventListener('pagehide', this.reset);
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden) this.reset();
+    });
+    window.addEventListener('gamepaddisconnected', () => this.releasePad());
     target.addEventListener('pointerdown', this.onPointerDown);
     window.addEventListener('pointerup', this.onPointerUp);
     window.addEventListener('pointermove', this.onPointerMove);
+    // A cancelled touch (a system gesture, the palm, an app switch) only cleans up.
+    // It is never a tap, so it never attacks.
+    window.addEventListener('pointercancel', this.onPointerCancel);
+    target.addEventListener('lostpointercapture', this.onPointerCancel);
     target.addEventListener('contextmenu', (e) => e.preventDefault());
-    // Any touch anywhere (menus too) switches the game to touch controls.
+    // Any touch anywhere (menus too) switches the game to touch controls; a mouse
+    // click or a key switches it back.
     window.addEventListener('pointerdown', (e) => {
-      if (e.pointerType === 'touch') this.enterTouchMode();
+      if (e.pointerType === 'touch') this.setMode('touch');
+      else if (e.isTrusted) this.setMode('kbm');
     }, { capture: true });
+    document.addEventListener('pointerlockerror', () => {
+      this.lockRefused = true;
+    });
     this.stickBase = document.createElement('div');
     this.stickBase.className = 'touch-stick';
     this.stickKnob = document.createElement('span');
@@ -92,6 +120,44 @@ export class Input {
     return this.buttonsPressed[index];
   }
 
+  /** True while a menu or card is open over the game. */
+  get menuOpen(): boolean {
+    return document.querySelector('.screen-layer--on') !== null;
+  }
+
+  /**
+   * Captures the mouse for first-person looking. Must be called from a click or
+   * key handler (browsers only grant it after a gesture). Resolves true when the
+   * lock took; a refusal (Chrome waits 1.25 s after Esc) leaves the "click to look"
+   * prompt up, and the next click tries again.
+   */
+  requestLock(): Promise<boolean> {
+    const el = this.target as HTMLElement & { requestPointerLock?: (o?: { unadjustedMovement?: boolean }) => Promise<void> | void };
+    if (!el.requestPointerLock || document.pointerLockElement === this.target) return Promise.resolve(document.pointerLockElement === this.target);
+    this.lockRefused = false;
+    const attempt = (opts?: { unadjustedMovement: boolean }): Promise<void> =>
+      new Promise((resolve, reject) => {
+        try {
+          const r = el.requestPointerLock!(opts);
+          if (r && typeof (r as Promise<void>).then === 'function') (r as Promise<void>).then(resolve, reject);
+          else resolve();
+        } catch (err) {
+          reject(err);
+        }
+      });
+    return attempt({ unadjustedMovement: true })
+      .catch((err: unknown) => {
+        // Older browsers don't know unadjustedMovement: ask again plainly.
+        if (err instanceof Error && err.name === 'NotSupportedError') return attempt();
+        throw err;
+      })
+      .then(() => true)
+      .catch(() => {
+        this.lockRefused = true;
+        return false;
+      });
+  }
+
   /**
    * Game controllers (Xbox / PlayStation layout, the browser's standard mapping).
    * In play: left stick walks, right stick turns the camera, A attack, X special,
@@ -101,17 +167,20 @@ export class Input {
   pollGamepad(menu: boolean, dt: number): void {
     const pads = navigator.getGamepads ? navigator.getGamepads() : [];
     const pad = Array.from(pads).find((p) => p && p.connected && p.mapping === 'standard') ?? Array.from(pads).find((p) => p && p.connected);
-    if (!pad) return;
+    if (!pad) {
+      if (this.padStick || this.padPrev.some(Boolean)) this.releasePad();
+      return;
+    }
     const dead = (v: number) => (Math.abs(v) < 0.18 ? 0 : (v - Math.sign(v) * 0.18) / 0.82);
     const lx = dead(pad.axes[0] ?? 0);
     const ly = dead(pad.axes[1] ?? 0);
     const down = pad.buttons.map((b) => b.pressed);
     const pressedNow = (i: number) => !!down[i] && !this.padPrev[i];
-    if (down.some(Boolean) || Math.hypot(lx, ly) > 0.5) this.padMode = true;
+    if (down.some(Boolean) || Math.hypot(lx, ly) > 0.5) this.setMode('pad');
 
     if (menu) {
       this.look.set(0, 0);
-      for (const code of ['KeyF', 'KeyG', 'Space', 'KeyR', 'KeyH', 'Escape']) this.release(code);
+      for (const code of this.padCodes) this.release(code);
       if (this.stickId === null && this.padStick) {
         this.stick.set(0, 0);
         this.padStick = false;
@@ -133,7 +202,7 @@ export class Input {
         else this.tapKey('Enter', 'Enter');
       }
       if (pressedNow(1) || pressedNow(9)) this.tapKey('Escape', 'Escape');
-    } else {
+    } else if (this.mode === 'pad') {
       if (this.stickId === null) {
         this.stick.set(lx, -ly);
         this.padStick = true;
@@ -146,6 +215,15 @@ export class Input {
       }
     }
     this.padPrev = down;
+  }
+
+  /** Lets go of everything a controller was holding (it was unplugged, or the player switched to other controls). */
+  private releasePad(): void {
+    for (const code of this.padCodes) this.release(code);
+    if (this.stickId === null && this.padStick) this.stick.set(0, 0);
+    this.padStick = false;
+    this.look.set(0, 0);
+    this.padPrev = [];
   }
 
   /** A key press and release for the menus (they listen for keys). */
@@ -181,7 +259,7 @@ export class Input {
     this.down.delete(code);
   }
 
-  /** Forgets every held key, e.g. when the hero arrives in a new hall. */
+  /** Forgets every held key, e.g. when the hero arrives in a new hall or a menu opens. */
   clear(): void {
     this.rightTap = false;
     this.reset();
@@ -202,9 +280,24 @@ export class Input {
     this.buttonsPressed.fill(false);
   }
 
+  private setMode(mode: InputMode): void {
+    if (this.mode === mode) return;
+    const was = this.mode;
+    this.mode = mode;
+    if (was === 'pad') this.releasePad();
+    if (was === 'touch') this.endStick();
+    document.body.classList.toggle('touch-mode', mode === 'touch');
+    document.body.classList.toggle('pad-mode', mode === 'pad');
+  }
+
   private onKeyDown = (e: KeyboardEvent): void => {
     if (e.target instanceof HTMLInputElement) return;
-    if (['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Tab'].includes(e.code)) e.preventDefault();
+    if (e.isTrusted) this.setMode('kbm');
+    // While a menu is open the keyboard belongs to the menu: Tab moves focus, Space
+    // and Enter press buttons, arrows pick. Only in play do we stop the browser.
+    const onButton = e.target instanceof HTMLButtonElement || e.target instanceof HTMLAnchorElement;
+    if (!this.menuOpen && !onButton && ['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Tab'].includes(e.code)) e.preventDefault();
+    if (this.menuOpen && e.code !== 'Escape') return;
     if (!this.down.has(e.code)) this.pressed.add(e.code);
     this.down.add(e.code);
   };
@@ -215,7 +308,7 @@ export class Input {
 
   private onPointerDown = (e: PointerEvent): void => {
     if (e.pointerType === 'touch') {
-      this.enterTouchMode();
+      this.setMode('touch');
       // Left half: the joystick appears under the thumb. Right half: tap to attack.
       if (e.clientX < window.innerWidth * 0.5) {
         if (this.stickId === null) {
@@ -236,7 +329,7 @@ export class Input {
     }
     if (e.button === 0 && this.wantsPointerLock && document.pointerLockElement !== this.target) {
       // The first click only captures the mouse; it doesn't swing.
-      this.target.requestPointerLock?.();
+      void this.requestLock();
       return;
     }
     this.updatePointer(e);
@@ -262,6 +355,15 @@ export class Input {
     }
     if (e.button === 2 && this.buttons[2] && this.rightTravel < 8) this.rightTap = true;
     if (e.button <= 2) this.buttons[e.button] = false;
+  };
+
+  private onPointerCancel = (e: PointerEvent): void => {
+    if (e.pointerType === 'touch') {
+      if (e.pointerId === this.stickId) this.endStick();
+      if (e.pointerId === this.lookId) this.lookId = null;
+      return;
+    }
+    this.buttons.fill(false);
   };
 
   private onPointerMove = (e: PointerEvent): void => {
@@ -318,12 +420,6 @@ export class Input {
     this.pointerActive = true;
   }
 
-  private enterTouchMode(): void {
-    if (this.touchMode) return;
-    this.touchMode = true;
-    document.body.classList.add('touch-mode');
-  }
-
   /** Lets the mouse go again (menus, pausing, switching views). */
   releasePointer(): void {
     if (document.pointerLockElement === this.target) document.exitPointerLock();
@@ -339,5 +435,11 @@ export class Input {
     this.down.clear();
     this.buttons.fill(false);
     this.endStick();
+    this.lookId = null;
+    this.look.set(0, 0);
+    if (this.padStick) {
+      this.stick.set(0, 0);
+      this.padStick = false;
+    }
   };
 }

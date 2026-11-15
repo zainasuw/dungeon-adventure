@@ -711,10 +711,13 @@ export class Game {
     this.paused = paused;
     this.input.endFrame();
     if (paused) {
+      this.input.clear();
       this.ui.prompt(null);
       this.ui.showPause();
     } else {
       this.ui.hideScreen();
+      // Called from the Resume click or the Esc key, so the browser allows the capture now.
+      this.recaptureMouse();
     }
   }
 
@@ -805,6 +808,7 @@ export class Game {
     this.step = 'explore';
     this.hero.revive();
     this.hero.invulnerable = 0;
+    this.hero.dodgeInvul = 0;
     this.hero.root.visible = true;
     if (start) this.hero.position.copy(start);
     else this.hero.position.copy(this.crypt.heroStart);
@@ -904,6 +908,7 @@ export class Game {
   /** Swaps in the room for a hall: its own floor, walls, pillars, props and traps. */
   private buildHall(index: number): void {
     this.scene.remove(this.crypt.group);
+    disposeOwned(this.crypt.group);
     this.crypt = buildCrypt(this.assets, this.glow, index);
     this.scene.add(this.crypt.group);
     this.nav = new NavGrid(this.crypt.colliders);
@@ -911,21 +916,24 @@ export class Game {
   }
 
   private clearActors(): void {
-    for (const e of this.enemies) this.scene.remove(e.root);
-    for (const ring of this.rings.values()) this.scene.remove(ring);
-    for (const lane of this.lanes.values()) this.scene.remove(lane);
+    for (const e of this.enemies) this.removeEnemy(e);
+    this.rings.clear();
     this.lanes.clear();
     for (const p of this.portals) this.scene.remove(p.mesh);
     this.portals = [];
     this.clearJob();
     this.removeMerchant();
-    for (const p of this.projectiles) this.scene.remove(p.mesh);
-    for (const z of this.zones) this.scene.remove(z.mesh);
-    for (const p of this.pickups) this.scene.remove(p.object);
+    for (const p of this.projectiles) this.removeMesh(p.mesh);
+    for (const z of this.zones) this.removeMesh(z.mesh);
+    for (const p of this.pickups) {
+      this.scene.remove(p.object);
+      disposeOwned(p.object);
+    }
     for (const c of this.crates) this.removeCrate(c);
     for (const c of this.coinsOnFloor) this.scene.remove(c.mesh);
     if (this.lost?.object) {
       this.scene.remove(this.lost.object);
+      disposeOwned(this.lost.object);
       this.lost.object = null;
     }
     if (this.brazier) {
@@ -1183,6 +1191,7 @@ export class Game {
     const m = this.merchant;
     if (!m) return;
     this.choosing = true;
+    this.input.clear();
     this.ui.hint(null);
     this.ui.prompt(null);
     this.audio.play('chest');
@@ -1227,6 +1236,7 @@ export class Game {
     this.choosing = false;
     this.input.clear();
     this.ui.hideScreen();
+    this.recaptureMouse();
     this.ui.objective('Follow the gold marker to the golden door');
   }
 
@@ -1234,6 +1244,7 @@ export class Game {
     const m = this.merchant;
     if (!m) return;
     this.scene.remove(m.who.root, m.props);
+    m.who.dispose();
     const i = this.crypt.colliders.boxes.indexOf(m.box);
     if (i >= 0) this.crypt.colliders.boxes.splice(i, 1);
     this.merchant = null;
@@ -1357,6 +1368,7 @@ export class Game {
   private clearJob(): void {
     for (const item of this.jobItems) {
       this.scene.remove(item.object);
+      disposeOwned(item.object);
       const i = item.box ? this.crypt.colliders.boxes.indexOf(item.box) : -1;
       if (i >= 0) this.crypt.colliders.boxes.splice(i, 1);
     }
@@ -2058,7 +2070,7 @@ export class Game {
       // On a narrow phone only two heroes fit: follow the one being looked at.
       const pick = !title && this.camera.aspect < 1 ? this.lineup[this.chosen] : undefined;
       this.camX = THREE.MathUtils.damp(this.camX, pick ? pick.position.x * 0.85 : 0, 6, dt);
-      this.rig.update(dt, t, this.camTarget.set(this.camX, title ? 1.25 : pick ? 0.15 : 0.95, LINEUP_Z + 0.3));
+      this.rig.update(dt, t, this.camTarget.set(this.camX, title ? 1.25 : pick ? 0.15 : this.camera.aspect < 1.6 ? 0.55 : 0.95, LINEUP_Z + 0.3));
       return;
     } else if (this.phase === 'victory') {
       // Hero stands to the right of the panel on wide screens.
@@ -2363,15 +2375,17 @@ export class Game {
     if (k.keyPressed('KeyV')) this.cycleCamera(true);
     const turn = fp ? 0 : (k.key('KeyQ') ? 1 : 0) - (k.key('KeyE') ? 1 : 0) - k.look.x;
     // Dragging with the right (or middle) button up and down tilts the view (or a controller's right stick).
+    // A thumb dragging on the right side of a touch screen turns these views too.
     if (!fp) {
-      this.camPitch = THREE.MathUtils.clamp(this.camPitch + k.dragY * 0.25 + k.look.y * 50 * this.lastDt, -22, 26);
-      this.camYaw += turn * 90 * this.lastDt - k.dragX * 0.3;
+      this.camPitch = THREE.MathUtils.clamp(this.camPitch + (k.dragY + k.lookDY * 0.5) * 0.25 + k.look.y * 50 * this.lastDt, -22, 26);
+      this.camYaw += turn * 90 * this.lastDt - (k.dragX + k.lookDX * 0.5) * 0.3;
+      if (k.lookDX) this.tipsShown.add('camera');
     }
     // Behind the hero: the camera swings round behind the way you're running (Roblox's
     // "Follow" camera), so you never have to keep fixing the view by hand. Not when you
     // walk back toward the camera (it would spin right round), and not in a fight with
     // a monster close by, where the view should hold still.
-    if (this.camStyle === 'behind' && !turn && !k.dragX && move.lengthSq() > 0.2) {
+    if (this.camStyle === 'behind' && !turn && !k.dragX && !k.lookDX && move.lengthSq() > 0.2) {
       const toward = move.dot(this.moveFwd) / Math.sqrt(move.lengthSq());
       const busy = this.step === 'fight' && this.nearestEnemy(this.hero.position, 4.5) !== null;
       if (toward > -0.3 && !busy) {
@@ -2477,13 +2491,7 @@ export class Game {
     // Remove the fallen once they have sunk away.
     this.enemies = this.enemies.filter((e) => {
       if (e.alive || e.deadTime < 3) return true;
-      this.scene.remove(e.root);
-      const ring = this.rings.get(e);
-      if (ring) this.scene.remove(ring);
-      this.rings.delete(e);
-      const lane = this.lanes.get(e);
-      if (lane) this.scene.remove(lane);
-      this.lanes.delete(e);
+      this.removeEnemy(e);
       return false;
     });
   }
@@ -2573,10 +2581,12 @@ export class Game {
 
   private damageHero(amount: number, from: THREE.Vector3): void {
     const hero = this.hero;
-    if (hero.invulnerable > 0) {
+    if (hero.dodgeInvul > 0) {
       this.floatAt(hero.position, 2.4, 'Dodged!', 'info');
       return;
     }
+    // The short mercy window after a hit: the blow just doesn't land, with no label.
+    if (hero.invulnerable > 0) return;
     const taken = hero.takeHit(amount);
     if (taken <= 0) {
       this.floatAt(hero.position, 2.4, 'Blocked', 'block');
@@ -2816,6 +2826,7 @@ export class Game {
     if (Math.random() < 0.5) this.glow.spawn({ x: p.x + (Math.random() - 0.5) * 0.8, y: 0.3, z: p.z + (Math.random() - 0.5) * 0.8, vy: 2.2, life: 1, size: 0.12, sizeEnd: 0.02, color: this.gold, intensity: 3 });
     if (p.distanceTo(this.tmp.copy(this.hero.position).setY(0)) > 1.4) return;
     this.scene.remove(lost.object);
+    disposeOwned(lost.object);
     this.coins += lost.coins;
     this.ui.setCoins(this.coins, true);
     this.audio.play('chest');
@@ -3032,6 +3043,7 @@ export class Game {
     const options = rollBlessings(this.blessings);
     if (!options.length) return;
     this.choosing = true;
+    this.input.clear();
     this.ui.prompt(null);
     this.ui.hint(null);
     this.audio.play('pillar');
@@ -3056,6 +3068,7 @@ export class Game {
     this.burst(hero.position.clone().setY(1.2), new THREE.Color(b.color), 60, 4);
     this.floatAt(hero.position, 2.8, b.name + '!', 'heal');
     this.saveProgress();
+    this.recaptureMouse();
   }
 
   /** Teaches something once, the first time it matters. */
@@ -3434,7 +3447,7 @@ export class Game {
       }
       if (dead) {
         this.burst(pos.clone(), p.color, 12, 2.5);
-        this.scene.remove(p.mesh);
+        this.removeMesh(p.mesh);
       } else keep.push(p);
     }
     this.projectiles = keep;
@@ -3474,7 +3487,7 @@ export class Game {
         this.puff(z.position.clone().add(new THREE.Vector3((Math.random() - 0.5) * z.radius * 1.6, 0, (Math.random() - 0.5) * z.radius * 1.6)), 1);
       }
       if (z.life > 0) return true;
-      this.scene.remove(z.mesh);
+      this.removeMesh(z.mesh);
       return false;
     });
   }
@@ -3490,19 +3503,23 @@ export class Game {
   }
 
   /** A round flask of glowing red potion with a white heart floating over it: reads as "health". */
+  private readonly potionParts = {
+    liquid: new THREE.SphereGeometry(0.27, 24, 16),
+    neck: new THREE.CylinderGeometry(0.08, 0.1, 0.2, 16),
+    cork: new THREE.CylinderGeometry(0.095, 0.085, 0.09, 12),
+    liquidMat: new THREE.MeshStandardMaterial({ color: '#ff2a4f', emissive: '#ff1040', emissiveIntensity: 0.7, roughness: 0.15, metalness: 0.1 }),
+    neckMat: new THREE.MeshStandardMaterial({ color: '#ffe3ea', roughness: 0.1, transparent: true, opacity: 0.85 }),
+    corkMat: new THREE.MeshStandardMaterial({ color: '#8a5a32', roughness: 0.8 }),
+  };
+
   private makePotion(): THREE.Group {
     const group = new THREE.Group();
-    const liquid = new THREE.Mesh(
-      new THREE.SphereGeometry(0.27, 24, 16),
-      new THREE.MeshStandardMaterial({ color: '#ff2a4f', emissive: '#ff1040', emissiveIntensity: 0.7, roughness: 0.15, metalness: 0.1 }),
-    );
+    const pp = this.potionParts;
+    const liquid = new THREE.Mesh(pp.liquid, pp.liquidMat);
     liquid.position.y = 0.27;
-    const neck = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.08, 0.1, 0.2, 16),
-      new THREE.MeshStandardMaterial({ color: '#ffe3ea', roughness: 0.1, transparent: true, opacity: 0.85 }),
-    );
+    const neck = new THREE.Mesh(pp.neck, pp.neckMat);
     neck.position.y = 0.6;
-    const cork = new THREE.Mesh(new THREE.CylinderGeometry(0.095, 0.085, 0.09, 12), new THREE.MeshStandardMaterial({ color: '#8a5a32', roughness: 0.8 }));
+    const cork = new THREE.Mesh(pp.cork, pp.corkMat);
     cork.position.y = 0.73;
     for (const m of [liquid, neck, cork]) m.castShadow = true;
     if (!this.heartTexture) this.heartTexture = makeHeartTexture();
@@ -3591,6 +3608,7 @@ export class Game {
       this.audio.play('pickup');
       this.floatAt(pk.base, 1.6, 'Potion +1', 'heal');
       this.scene.remove(pk.object);
+      disposeOwned(pk.object);
       return false;
     });
   }
@@ -3613,6 +3631,13 @@ export class Game {
   }
 
   private floatAt(p: THREE.Vector3, lift: number, text: string, kind: FloatKind): void {
+    if (this.firstPerson && p.distanceToSquared(this.hero.position) < 0.3) {
+      // In first person the hero stands where the camera is, so its own numbers
+      // would land off screen: show them just under the aim dot instead.
+      const canvas = this.renderer.gl.domElement;
+      this.ui.float(text, canvas.clientWidth / 2 + (Math.random() - 0.5) * 60, canvas.clientHeight * 0.6, kind);
+      return;
+    }
     const s = this.toScreen(p, lift);
     if (s.on) this.ui.float(text, s.x, s.y, kind);
   }
@@ -3685,6 +3710,37 @@ export class Game {
 
   // ───────────────────────── Helpers ─────────────────────────
 
+  /** Takes a monster out of the scene and frees what it owned (skeleton, materials, warning ring and lane). */
+  private removeEnemy(e: Enemy): void {
+    this.scene.remove(e.root);
+    e.dispose();
+    const ring = this.rings.get(e);
+    if (ring) this.removeMesh(ring);
+    this.rings.delete(e);
+    const lane = this.lanes.get(e);
+    if (lane) {
+      this.removeMesh(lane);
+      lane.geometry.dispose();
+    }
+    this.lanes.delete(e);
+  }
+
+  /** Removes a one-off mesh whose material was made for it (orbs, knives, rings, zones). Shared geometry stays. */
+  private removeMesh(mesh: THREE.Object3D): void {
+    this.scene.remove(mesh);
+    if (mesh instanceof THREE.Mesh && mesh.material instanceof THREE.Material && !mesh.material.userData.shared) mesh.material.dispose();
+  }
+
+  /**
+   * First person on a mouse: after a menu closes from a click or key, capture the
+   * mouse right away so the player doesn't have to click the world again. A refusal
+   * (Chrome waits 1.25 s after Esc) just leaves the "click to look around" prompt.
+   */
+  private recaptureMouse(): void {
+    const capture = this.firstPerson && !this.paused && !this.choosing && this.input.mode === 'kbm';
+    if (capture) void this.input.requestLock();
+  }
+
   private later(seconds: number, run: () => void): void {
     this.timers.push({ at: seconds, run });
   }
@@ -3711,7 +3767,10 @@ export class Game {
     hero.position.copy(previous ? previous.position : this.crypt.heroStart);
     hero.facing = previous ? previous.facing : Math.PI;
     hero.root.visible = previous ? previous.root.visible : true;
-    if (previous) this.scene.remove(previous.root);
+    if (previous) {
+      this.scene.remove(previous.root);
+      previous.dispose();
+    }
     this.scene.add(hero.root);
     this.hero = hero;
     this.fpBodyHidden = false;
@@ -3858,4 +3917,26 @@ function makeHeartTexture(): THREE.Texture {
   const texture = new THREE.CanvasTexture(canvas);
   texture.colorSpace = THREE.SRGBColorSpace;
   return texture;
+}
+
+/**
+ * Frees the GPU buffers a hall owned when it is torn down: instanced piece
+ * batches, and any geometry, material or texture built just for that hall.
+ * Library pieces are marked shared and are left alone.
+ */
+function disposeOwned(root: THREE.Object3D): void {
+  root.traverse((o) => {
+    if (o instanceof THREE.InstancedMesh) o.dispose();
+    if (o instanceof THREE.Points || o instanceof THREE.Mesh || o instanceof THREE.Line) {
+      const g = o.geometry;
+      if (g && !g.userData.shared) g.dispose();
+      const mats = Array.isArray(o.material) ? o.material : [o.material];
+      for (const m of mats) {
+        if (!m || m.userData.shared) continue;
+        const map = (m as THREE.MeshBasicMaterial).map;
+        if (map instanceof THREE.CanvasTexture) map.dispose();
+        m.dispose();
+      }
+    }
+  });
 }

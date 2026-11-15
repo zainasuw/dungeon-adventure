@@ -34,8 +34,10 @@ export class Hero extends Character {
   readonly def: HeroClass;
   resource = 100;
   readonly cooldowns: number[];
-  /** Remaining damage-immunity time (dodges, after being hit). */
+  /** Remaining damage-immunity time after being hit (a short mercy window). */
   invulnerable = 0;
+  /** Remaining immunity from a dodge roll, step or blink: the only kind that counts as "Dodged!". */
+  dodgeInvul = 0;
   /** Remaining time of the class's guard/barrier/smoke/renew effect. */
   buff = 0;
   /** Shield points left on the Mage's Arcane Shield. */
@@ -80,6 +82,7 @@ export class Hero extends Character {
   update(dt: number, input: HeroInput, events: HeroEvents): void {
     this.stateTime += dt;
     this.invulnerable = Math.max(0, this.invulnerable - dt);
+    this.dodgeInvul = Math.max(0, this.dodgeInvul - dt);
     this.buff = Math.max(0, this.buff - dt);
     if (this.buff === 0) this.barrier = 0;
     for (let i = 0; i < this.cooldowns.length; i++) this.cooldowns[i] = Math.max(0, this.cooldowns[i] - dt);
@@ -131,7 +134,7 @@ export class Hero extends Character {
 
   /** Applies incoming damage after dodges, guards and shields. Returns damage taken. */
   takeHit(amount: number): number {
-    if (!this.alive || this.invulnerable > 0) return 0;
+    if (!this.alive || this.invulnerable > 0 || this.dodgeInvul > 0) return 0;
     const kind = this.def.abilities[3].kind;
     if (this.buff > 0 && kind.type === 'guard') amount *= 1 - kind.reduction;
     if (this.barrier > 0) {
@@ -312,11 +315,11 @@ export class Hero extends Character {
     this.state = 'dash';
     if (kind.type === 'blink') {
       this.dashDuration = 0.14;
-      this.invulnerable = Math.max(this.invulnerable, 0.25);
+      this.dodgeInvul = Math.max(this.dodgeInvul, 0.25);
       this.animator.play('Spellcast_Raise', { loop: false, speed: 2.2, fade: 0.05, restart: true });
     } else {
       this.dashDuration = kind.type === 'shadowstep' ? 0.3 : 0.38;
-      this.invulnerable = Math.max(this.invulnerable, this.dashDuration * 0.85);
+      this.dodgeInvul = Math.max(this.dodgeInvul, this.dashDuration * 0.85);
       this.animator.play('Dodge_Forward', { loop: false, speed: kind.type === 'shadowstep' ? 1.9 : 1.6, fade: 0.05, restart: true });
     }
     events.dash(kind.type as 'roll' | 'shadowstep' | 'blink', this.dashFrom, this.dashTo);

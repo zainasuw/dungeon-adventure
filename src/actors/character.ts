@@ -81,6 +81,20 @@ export class Character {
     this.flashDuration = duration;
   }
 
+  /**
+   * Frees what this character owns on the GPU: its skeleton's bone texture and
+   * its own material copies. Geometries and textures stay: they belong to the
+   * shared asset library.
+   */
+  dispose(): void {
+    this.animator.mixer.stopAllAction();
+    this.animator.mixer.uncacheRoot(this.model);
+    this.model.traverse((o) => {
+      if (o instanceof THREE.SkinnedMesh) o.skeleton.dispose();
+      if (o instanceof THREE.Mesh && o.material instanceof THREE.Material && !o.material.userData.shared) o.material.dispose();
+    });
+  }
+
   /** Advances animation and visual state. Call once per frame. */
   updateVisuals(dt: number): void {
     this.root.rotation.y = this.facing;
