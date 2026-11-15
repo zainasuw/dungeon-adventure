@@ -74,6 +74,8 @@ export class Ui {
   private readonly fadeEl: HTMLElement;
   private readonly promptEl: HTMLElement;
   private readonly lowHp: HTMLElement;
+  private readonly hintEl: HTMLElement;
+  private hintTimer = 0;
   private readonly enemyBars = new Map<object, { root: HTMLElement; fill: HTMLElement; seen: number }>();
   private bannerTimer = 0;
   private selectState = { hero: 'warrior' as HeroClassId, name: '', difficulty: 'easy' as DifficultyId };
@@ -106,9 +108,11 @@ export class Ui {
     this.bannerEl = el('div', 'banner');
     this.screen = el('div', 'screen-layer');
     this.fadeEl = el('div', 'fade');
+    this.hintEl = el('div', 'hint');
+    this.hintEl.setAttribute('role', 'status');
     this.bannerEl.setAttribute('role', 'status');
     this.bannerEl.setAttribute('aria-live', 'polite');
-    root.append(this.lowHp, this.bars, this.floaters, this.promptEl, this.hud, this.bannerEl, this.screen, this.fadeEl);
+    root.append(this.lowHp, this.bars, this.floaters, this.promptEl, this.hud, this.hintEl, this.bannerEl, this.screen, this.fadeEl);
     window.addEventListener('keydown', this.onKey);
   }
 
@@ -207,20 +211,18 @@ export class Ui {
       `<div class="card card--wide" role="dialog" aria-modal="true" aria-labelledby="howto-title">
         <h2 id="howto-title" class="card__title">How to play</h2>
         <ol class="howto">
-          ${step(1, 'Take the pillar', 'Walk to the glowing altar and press <kbd>E</kbd>.', icon(PILLAR_PATH, 'icon icon--gold'))}
+          ${step(1, 'Take the pillar', 'Follow the golden arrow to the glowing altar and walk up to it.', icon(PILLAR_PATH, 'icon icon--gold'))}
           ${step(2, 'Beat the skeletons', 'Taking the pillar wakes them up. Defeat them all.', iconByName('swordSlice', 'icon icon--gold'))}
           ${step(3, 'Go through the door', 'The golden door opens. Walk in to reach the next hall.', iconByName('teleport', 'icon icon--gold'))}
         </ol>
         <p class="howto__goal">Collect all <b>4 pillars</b> to escape and win.</p>
         <div class="keys">
           ${key('W A S D', 'Walk (arrow keys work too)')}
-          ${key('Mouse', 'Aim where you point')}
-          ${key('Click', 'Attack')}
+          ${key('Click', 'Attack (it aims for you)')}
           ${key('R-Click', 'Special move')}
           ${key('Space', 'Dodge')}
           ${key('Q', 'Hero power')}
           ${key('H', 'Drink a potion')}
-          ${key('E', 'Take the pillar')}
           ${key('Esc', 'Pause')}
         </div>
         <p class="howto__tip">Tip: a red ring on the floor means a skeleton is about to swing. Dodge out of it!</p>
@@ -326,6 +328,18 @@ export class Ui {
     this.bannerTimer = window.setTimeout(() => this.bannerEl.classList.remove('banner--show'), seconds * 1000);
   }
 
+  /** A one-line tip above the action bar that teaches the next thing to do. */
+  hint(html: string | null, seconds = 5): void {
+    window.clearTimeout(this.hintTimer);
+    if (!html) {
+      this.hintEl.classList.remove('hint--on');
+      return;
+    }
+    this.hintEl.innerHTML = html;
+    this.hintEl.classList.add('hint--on');
+    this.hintTimer = window.setTimeout(() => this.hintEl.classList.remove('hint--on'), seconds * 1000);
+  }
+
   fade(on: boolean): void {
     this.fadeEl.classList.toggle('fade--on', on);
   }
@@ -336,6 +350,7 @@ export class Ui {
     this.hud.classList.toggle('hud--hidden', !visible);
     if (!visible) {
       this.prompt(null);
+      this.hint(null);
       this.lowHp.classList.remove('low-hp--on');
     }
   }

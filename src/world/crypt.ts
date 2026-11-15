@@ -66,7 +66,8 @@ export function buildCrypt(assets: Assets, embers: Particles): Crypt {
 
   // Walls: front faces point into the room.
   const north = ['wall_cracked', 'wall', 'wall', 'DOOR', 'wall', 'wall', 'wall_cracked'];
-  const south = ['wall', 'wall_cracked', 'wall', 'wall_arched', 'wall', 'wall_broken', 'wall'];
+  // The near wall is a low ledge so it never hides the hero from the camera.
+  const south = ['wall_half', 'wall_half', 'wall_half', 'wall_half', 'wall_half', 'wall_half', 'wall_half'];
   const west = ['wall', 'wall_shelves', 'wall', 'wall_cracked', 'wall'];
   const east = ['wall', 'wall_cracked', 'wall', 'wall_gated', 'wall'];
   let doorway: THREE.Group | null = null;
@@ -121,8 +122,7 @@ export function buildCrypt(assets: Assets, embers: Particles): Crypt {
   kit.instance('sword_shield_broken', -12.4, 0, 2.6, 0.9);
   kit.instance('sword_shield_broken', 6.6, 0, -9.7, -0.6);
   kit.instance('chair', -10.7, 0, 8.6, 2.3);
-  kit.instance('bottle_A_green', -13.6, 0, 8.4, 0);
-  kit.instance('bottle_B_brown', -11.6, 0, 10.7, 0);
+  // (No decorative bottles: players read any bottle as a potion to pick up.)
   // Wall torches on the walls that face the camera. (The south wall shows its
   // back to the camera, so torches there would only light the void.)
   const torches = new Torches(group, embers);

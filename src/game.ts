@@ -54,7 +54,7 @@ interface Timer {
 }
 
 const REDUCED_MOTION = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-const PLAY_VIEW = { yaw: 0, pitch: 58, distance: 24 };
+const PLAY_VIEW = { yaw: 0, pitch: 42, distance: 18 };
 const ALTAR_REACH = 3.7;
 
 export class Game {
@@ -100,6 +100,10 @@ export class Game {
   private hitStop = 0;
   private deadTimer = 0;
   private frameCount = 0;
+  /** Tips already shown this session, so each one teaches once. */
+  private readonly tipsShown = new Set<string>();
+  private autoPotionCooldown = 0;
+  private arrow!: THREE.Mesh;
 
   private readonly hemi = new THREE.HemisphereLight();
   private readonly moon = new THREE.DirectionalLight();
@@ -149,7 +153,7 @@ export class Game {
     this.input = new Input(this.renderer.gl.domElement);
     this.rig = new CameraRig(this.camera);
     // Don't follow the hero right up to the south wall: it would fill the screen.
-    this.rig.bounds.maxZ = 4.5;
+    this.rig.bounds.maxZ = 3.6;
 
     const pmrem = new THREE.PMREMGenerator(this.renderer.gl);
     this.scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
@@ -171,6 +175,8 @@ export class Game {
     for (const material of assets.kitMaterials) applySeeThrough(material);
     this.crypt = buildCrypt(assets, this.glow);
     this.scene.add(this.crypt.group, this.glow.points, this.dust.points);
+    this.arrow = this.makeArrow();
+    this.scene.add(this.arrow);
 
     this.ui = new Ui(uiRoot, {
       newQuest: () => this.openSelect(),
@@ -354,14 +360,15 @@ export class Game {
     this.hero.revive();
     this.hero.invulnerable = 0;
     this.hero.root.visible = true;
-    this.hero.position.copy(this.crypt.heroStart);
+    this.hero.position.set(0, 0, 5.4);
     this.hero.facing = Math.PI;
     this.hero.velocity.set(0, 0, 0);
     this.hero.animator.play('Idle', { fade: 0 });
     this.renew.left = 0;
     this.rig.setView(PLAY_VIEW.yaw, PLAY_VIEW.pitch, PLAY_VIEW.distance);
     this.ui.setQuest(index, this.pillars);
-    this.ui.objective('Walk to the glowing altar and take the pillar');
+    this.ui.objective('Follow the golden arrow to the altar');
+    this.later(2.6, () => this.tip('walk', 'Walk with <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> or the arrow keys'));
     this.ui.banner(`Hall ${index + 1} of 4`, level.hall, `Guarding the Pillar of ${level.pillar}`);
     this.ui.fade(false);
   }
@@ -405,6 +412,7 @@ export class Game {
     this.shake(0.35);
     this.audio.play('pillar');
     this.ui.objective('The skeletons are waking up! Defeat them all');
+    this.later(1.2, () => this.tip('attack', '<kbd>Click</kbd> to attack. Hold it to keep swinging. Your hero aims for you!', 6));
     this.enemies.forEach((e, i) => {
       if (e.state !== 'dormant') return;
       this.later(0.35 + i * 0.35, () => {
@@ -443,7 +451,7 @@ export class Game {
     this.later(0.6, () => this.audio.play('door'));
     const last = this.level === LEVELS.length - 1;
     this.ui.banner('Pillar claimed', `Pillar of ${LEVELS[this.level].pillar}`, last ? 'All four pillars are awake!' : `${this.pillars} of 4 pillars awake`);
-    this.ui.objective(last ? 'The way out is open! Walk through the golden door' : 'Walk through the golden door');
+    this.ui.objective(last ? 'The way out is open! Follow the arrow to the golden door' : 'Follow the arrow to the golden door');
     if (this.hero.state === 'free') this.hero.animator.play('Cheer', { loop: false, fade: 0.15, restart: true });
   }
 
@@ -552,7 +560,8 @@ export class Game {
       this.rig.setView(0, 11, 8.4);
       this.rig.update(dt, t, this.camTarget.set(this.hero.position.x - (wide ? 2.3 : 0), wide ? 1.15 : 1.6, this.hero.position.z));
     } else {
-      this.rig.update(dt, t, this.hero.position);
+      // Look a little ahead (north), where the altar and the door are.
+      this.rig.update(dt, t, this.camTarget.copy(this.hero.position).setY(0).add(new THREE.Vector3(0, 0, -1.2)));
     }
   }
 
@@ -586,7 +595,7 @@ export class Game {
 
     // The hall's steps.
     const altarDist = hero.position.distanceTo(this.crypt.altar.position);
-    if (this.step === 'explore' && altarDist < ALTAR_REACH && this.input.keyPressed('KeyE') && hero.state === 'free') {
+    if (this.step === 'explore' && altarDist < ALTAR_REACH && hero.state === 'free') {
       this.step = 'claiming';
       hero.interact();
       this.crypt.altar.setCharge(1);
@@ -613,6 +622,16 @@ export class Game {
       this.guideToDoor(dt);
       const p = hero.position;
       if (this.crypt.door.isOpen && p.z < -10.1 && Math.abs(p.x) < 2.6) this.exitHall();
+    }
+
+    this.updateArrow(dt);
+    this.autoPotion(dt);
+    if (this.step === 'fight') {
+      if (this.enemies.some((e) => e.telegraph > 0.2 && e.position.distanceTo(hero.position) < e.def.reach + 1.5)) {
+        this.tip('dodge', 'Red ring = a skeleton is about to hit. Press <kbd>Space</kbd> to dodge!');
+      }
+      if (hero.hp < hero.maxHp * 0.6 && this.potions > 0) this.tip('potion', 'Hurt? Press <kbd>H</kbd> to drink a potion');
+      if (this.kills >= 2) this.tip('special', 'Try your special move: <kbd>R-Click</kbd>');
     }
 
     if (!hero.alive) this.lose();
@@ -651,11 +670,13 @@ export class Game {
     if (move.lengthSq() > 1) move.normalize();
 
     this.raycaster.setFromCamera(k.pointer, this.camera);
-    if (!k.pointerActive || !this.raycaster.ray.intersectPlane(this.floor, this.heroInput.aim)) {
-      // No mouse: aim where the hero faces, or at the nearest monster.
-      const target = this.nearestEnemy(this.hero.position, 9);
-      if (target) this.heroInput.aim.copy(target.position);
-      else this.heroInput.aim.copy(this.hero.position).add(new THREE.Vector3(Math.sin(this.hero.facing), 0, Math.cos(this.hero.facing)));
+    const hasMouse = k.pointerActive && this.raycaster.ray.intersectPlane(this.floor, this.heroInput.aim) !== null;
+    // Aim assist: snap to the best monster near where the player points, or the nearest one.
+    const target = this.autoTarget(hasMouse ? this.heroInput.aim : null);
+    if (target) this.heroInput.aim.copy(target.position);
+    else if (!hasMouse) {
+      const dir = move.lengthSq() > 0.01 ? move : new THREE.Vector3(Math.sin(this.hero.facing), 0, Math.cos(this.hero.facing));
+      this.heroInput.aim.copy(this.hero.position).add(dir);
     }
     this.heroInput.attack = k.buttonPressed(0) || k.keyPressed('KeyJ') || k.keyPressed('KeyF') || (k.button(0) && this.hero.state === 'free');
     this.heroInput.secondary = k.buttonPressed(2) || k.keyPressed('KeyK') || k.keyPressed('KeyG');
@@ -839,6 +860,104 @@ export class Game {
     if (Math.random() < this.difficulty.potionDrop) {
       this.later(0.5, () => this.dropPotion(e.position.clone().setY(0)));
     }
+  }
+
+  /**
+   * Picks what an attack should aim at. Monsters close to the hero always win;
+   * further ones count when they are roughly where the mouse points.
+   */
+  private autoTarget(pointer: THREE.Vector3 | null): Enemy | null {
+    const hero = this.hero.position;
+    let best: Enemy | null = null;
+    let bestScore = Infinity;
+    const want = pointer ? this.tmp.copy(pointer).sub(hero).setY(0) : null;
+    if (want && want.lengthSq() > 0.01) want.normalize();
+    for (const e of this.enemies) {
+      if (!e.active) continue;
+      const dx = e.position.x - hero.x;
+      const dz = e.position.z - hero.z;
+      const d = Math.hypot(dx, dz);
+      if (d > 11) continue;
+      let score = d;
+      if (want && d > 3.2) {
+        const cos = (dx * want.x + dz * want.z) / Math.max(d, 0.001);
+        if (cos < Math.cos(THREE.MathUtils.degToRad(40))) continue;
+        score += (1 - cos) * 6;
+      }
+      if (score < bestScore) {
+        bestScore = score;
+        best = e;
+      }
+    }
+    return best;
+  }
+
+  /** Teaches something once, the first time it matters. */
+  private tip(id: string, html: string, seconds = 5): void {
+    if (this.tipsShown.has(id)) return;
+    this.tipsShown.add(id);
+    this.ui.hint(html, seconds);
+  }
+
+  /** Easy mode drinks a potion by itself when health runs low. */
+  private autoPotion(dt: number): void {
+    this.autoPotionCooldown -= dt;
+    const hero = this.hero;
+    if (this.difficulty.id !== 'easy' || !hero.alive || this.potions <= 0 || this.autoPotionCooldown > 0) return;
+    if (hero.hp > hero.maxHp * 0.3) return;
+    this.autoPotionCooldown = 4;
+    this.floatAt(hero.position, 2.8, 'Auto potion!', 'heal');
+    this.drinkPotion();
+  }
+
+  private makeArrow(): THREE.Mesh {
+    const shape = new THREE.Shape();
+    shape.moveTo(0, 0.55);
+    shape.lineTo(0.42, 0);
+    shape.lineTo(0.18, 0);
+    shape.lineTo(0.18, -0.45);
+    shape.lineTo(-0.18, -0.45);
+    shape.lineTo(-0.18, 0);
+    shape.lineTo(-0.42, 0);
+    shape.closePath();
+    const geometry = new THREE.ShapeGeometry(shape);
+    geometry.rotateX(-Math.PI / 2);
+    geometry.rotateY(Math.PI);
+    const mesh = new THREE.Mesh(
+      geometry,
+      new THREE.MeshBasicMaterial({ color: new THREE.Color('#ffc35a').multiplyScalar(1.6), transparent: true, opacity: 0, depthWrite: false, toneMapped: false }),
+    );
+    mesh.renderOrder = 2;
+    return mesh;
+  }
+
+  /** The golden arrow on the floor that points at the next thing to do. */
+  private updateArrow(dt: number): void {
+    const hero = this.hero;
+    let goal: THREE.Vector3 | null = null;
+    let color = '#ffc35a';
+    if (this.step === 'explore') goal = this.crypt.altar.position;
+    else if (this.step === 'cleared' && this.crypt.door.isOpen) goal = new THREE.Vector3(0, 0, -11);
+    else if (this.step === 'fight') {
+      // Only when every monster is far away (or behind the hero), point to the closest.
+      const near = this.nearestEnemy(hero.position, 7);
+      const far = near ? null : this.nearestEnemy(hero.position, 40);
+      if (far) {
+        goal = far.position;
+        color = '#ff5a4a';
+      }
+    }
+    const mat = this.arrow.material as THREE.MeshBasicMaterial;
+    const show = goal !== null && hero.alive && hero.position.distanceTo(goal) > 4.2;
+    mat.opacity = THREE.MathUtils.damp(mat.opacity, show ? 0.75 + Math.sin(this.time * 5) * 0.2 : 0, 10, dt);
+    if (!goal) return;
+    mat.color.set(color).multiplyScalar(1.6);
+    const dir = this.tmp.copy(goal).sub(hero.position).setY(0).normalize();
+    const pulse = 2.9 + Math.sin(this.time * 5) * 0.2;
+    // Floats just above the altar's steps so they can't hide it.
+    this.arrow.position.set(hero.position.x + dir.x * pulse, 0.62, hero.position.z + dir.z * pulse);
+    this.arrow.rotation.y = Math.atan2(dir.x, dir.z);
+    this.arrow.scale.setScalar(1.7);
   }
 
   private nearestEnemy(from: THREE.Vector3, within: number): Enemy | null {
@@ -1208,17 +1327,12 @@ export class Game {
     const frame = this.frameCount;
     for (const e of this.enemies) {
       const s = this.toScreen(e.position, e.def.scale * 2.15);
-      this.ui.enemyBar(e, s.x, s.y, e.hp / e.maxHp, e.alive && e.active && e.hp < e.maxHp && s.on, frame);
+      this.ui.enemyBar(e, s.x, s.y, e.hp / e.maxHp, e.alive && e.active && s.on, frame);
     }
     this.ui.sweepBars(frame);
 
-    const hero = this.hero;
     if (this.paused) return;
-    if (this.step === 'explore' && hero.alive && hero.position.distanceTo(this.crypt.altar.position) < ALTAR_REACH + 2) {
-      const s = this.toScreen(hero.position, -0.9);
-      const near = hero.position.distanceTo(this.crypt.altar.position) < ALTAR_REACH;
-      this.ui.prompt(near ? '<kbd>E</kbd> Take the pillar' : 'Come closer', s.x, s.y);
-    } else if (this.step === 'cleared' && this.crypt.door.isOpen) {
+    if (this.step === 'cleared' && this.crypt.door.isOpen) {
       const s = this.toScreen(new THREE.Vector3(0, 0, -10.6), 0.2);
       this.ui.prompt(this.level === LEVELS.length - 1 ? 'Escape!' : 'Next hall', s.x, s.y);
     } else {
