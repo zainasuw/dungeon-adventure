@@ -3,7 +3,7 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { MeshoptDecoder } from 'three/addons/libs/meshopt_decoder.module.js';
 import { clone as cloneSkinned } from 'three/addons/utils/SkeletonUtils.js';
 
-export const HERO_MODELS = ['Knight', 'Mage', 'Rogue', 'Rogue_Hooded'] as const;
+export const HERO_MODELS = ['Knight', 'Mage', 'Rogue', 'Rogue_Hooded', 'Barbarian'] as const;
 export const SKELETON_MODELS = ['Skeleton_Minion', 'Skeleton_Warrior', 'Skeleton_Rogue', 'Skeleton_Mage'] as const;
 export type HeroModel = (typeof HERO_MODELS)[number];
 export type SkeletonModel = (typeof SKELETON_MODELS)[number];

@@ -13,7 +13,8 @@ import { clearSave, DEFAULT_ROUTE, DIFFICULTIES, PATH_POOL, randomRoute, type Pa
 import { MOODS, type Mood } from './render/moods';
 import { Renderer } from './render/renderer';
 import { applySeeThrough, seeThrough } from './render/see-through';
-import { HERO_ORDER, Ui, type FloatKind, type QuestStats } from './ui/ui';
+import { HERO_ORDER, Ui, type FloatKind, type QuestStats, type ShopItem } from './ui/ui';
+import { Character } from './actors/character';
 import { buildCrypt, type Crypt } from './world/crypt';
 import type { Encounter } from './world/dungeon';
 import { NavGrid } from './world/nav';
@@ -148,6 +149,10 @@ export class Game {
   private readonly portalGeometry = new THREE.PlaneGeometry(2.2, 2.2);
   private readonly portalTexture = Game.makePortalTexture();
   private readonly portalColor = new THREE.Color('#b25cff');
+  /** The travelling merchant who sets up shop in a cleared hall. */
+  private merchant: { who: Character; props: THREE.Group; box: Crate['box']; items: ShopItem[] } | null = null;
+  /** Max health bought at the shop (kept for the whole quest). */
+  private bonusHp = 0;
   private jobItems: JobItem[] = [];
   private readonly wispColor = new THREE.Color('#9dffb8');
   private jobNag = 0;
@@ -497,6 +502,7 @@ export class Game {
     this.difficulty = DIFFICULTIES[difficulty];
     this.route = randomRoute();
     this.pathReward = null;
+    this.bonusHp = 0;
     this.stage = 0;
     this.level = this.route[0];
     this.pillars = 0;
@@ -787,6 +793,7 @@ export class Game {
     for (const p of this.portals) this.scene.remove(p.mesh);
     this.portals = [];
     this.clearJob();
+    this.removeMerchant();
     for (const p of this.projectiles) this.scene.remove(p.mesh);
     for (const z of this.zones) this.scene.remove(z.mesh);
     for (const p of this.pickups) this.scene.remove(p.object);
@@ -926,6 +933,141 @@ export class Game {
         this.portals.splice(i, 1);
       }
     }
+  }
+
+  // ───────────────────────── The merchant ─────────────────────────
+
+  /**
+   * After a hall is cleared a merchant sets up beside the altar, like Charon's
+   * shop in Hades: a small random stock, a bigger one before the King.
+   */
+  private placeMerchant(): void {
+    if (this.merchant || this.phase !== 'play' || this.step !== 'cleared') return;
+    const a = this.crypt.altar.position;
+    const tries = [Math.PI / 2, -Math.PI / 2, Math.PI * 0.75, -Math.PI * 0.75, Math.PI * 0.25, -Math.PI * 0.25];
+    let spot: THREE.Vector3 | null = null;
+    for (const r of [4.6, 6, 7.5]) {
+      for (const ang of tries) {
+        const x = a.x + Math.sin(ang) * r;
+        const z = a.z + Math.cos(ang) * r;
+        if (!this.crypt.colliders.hits(x, z, 1.6) && this.hero.position.distanceTo(new THREE.Vector3(x, 0, z)) > 2.5) {
+          spot = new THREE.Vector3(x, 0, z);
+          break;
+        }
+      }
+      if (spot) break;
+    }
+    if (!spot) return;
+    const who = new Character(this.assets, 'Barbarian', this.assets.heroClips);
+    who.hideParts(['Barbarian_Round_Shield', '2H_Axe', '1H_Axe', '1H_Axe_Offhand']);
+    who.position.copy(spot);
+    who.facing = Math.atan2(this.hero.position.x - spot.x, this.hero.position.z - spot.z);
+    who.root.rotation.y = who.facing;
+    who.animator.play('Cheer', { loop: false });
+    who.root.traverse((o) => (o.castShadow = true));
+    // A little stall: a chest of goods and some coins.
+    const props = new THREE.Group();
+    const side = new THREE.Vector3(Math.cos(who.facing), 0, -Math.sin(who.facing));
+    const chest = this.assets.piece('chest_gold');
+    chest.position.copy(spot).addScaledVector(side, 1.1);
+    chest.rotation.y = who.facing;
+    const coins = this.assets.piece('coin_stack_medium');
+    coins.position.copy(spot).addScaledVector(side, -1);
+    props.add(chest, coins);
+    this.scene.add(who.root, props);
+    const box = { minX: spot.x - 0.6, maxX: spot.x + 0.6, minZ: spot.z - 0.6, maxZ: spot.z + 0.6 };
+    this.crypt.colliders.boxes.push(box);
+    this.guideNav = null;
+    this.burst(spot.clone().setY(1.2), this.gold, 40, 3.5);
+    this.puff(spot, 12);
+    this.audio.play('chest');
+    const beforeKing = LEVELS[this.route[this.stage + 1]]?.boss === true;
+    this.merchant = { who, props, box, items: this.rollShop(beforeKing ? 4 : 3) };
+  }
+
+  private rollShop(count: number): ShopItem[] {
+    const all: ShopItem[] = [
+      { name: 'Health Potion', text: 'One more potion for later.', price: 15, icon: 'potion', color: '#ff4f78', sold: false },
+      { name: 'Hearty Meal', text: 'Heal all your health right now.', price: 20, icon: 'heal', color: '#7dff9e', sold: false },
+      { name: 'Iron Heart', text: '+20 max health for the rest of the quest.', price: 40, icon: 'heart', color: '#5ee0ff', sold: false },
+      { name: 'Blessing', text: 'Choose one more blessing.', price: 55, icon: 'blessing', color: '#ffd23a', sold: false },
+    ];
+    // The potion is always there (it's what kids need most); the rest are random.
+    const rest = all.slice(1).sort(() => Math.random() - 0.5);
+    return [all[0], ...rest].slice(0, count);
+  }
+
+  private nearMerchant(): boolean {
+    return !!this.merchant && this.phase === 'play' && !this.choosing && this.merchant.who.position.distanceTo(this.hero.position) < 2.8;
+  }
+
+  private updateMerchant(dt: number): void {
+    const m = this.merchant;
+    if (!m) return;
+    m.who.updateVisuals(dt);
+    if (m.who.animator.progress >= 1) m.who.animator.play('Idle');
+    if (!this.choosing && m.who.position.distanceTo(this.hero.position) < 9) this.tip('shop', 'A <b>merchant</b>! Walk up and press <kbd>F</kbd> to spend your coins.', 6);
+    if (this.nearMerchant() && (this.input.keyPressed('KeyF') || this.input.keyPressed('KeyJ'))) this.openShop();
+  }
+
+  private openShop(): void {
+    const m = this.merchant;
+    if (!m) return;
+    this.choosing = true;
+    this.ui.hint(null);
+    this.ui.prompt(null);
+    this.audio.play('chest');
+    m.who.animator.play('Cheer', { loop: false, restart: true });
+    this.ui.showShop(m.items, this.coins, (i) => this.buy(i), () => this.closeShop());
+  }
+
+  private buy(i: number): void {
+    const m = this.merchant;
+    const it = m?.items[i];
+    if (!m || !it || it.sold || it.price > this.coins) return;
+    const hero = this.hero;
+    if (it.icon === 'potion' && this.potions >= this.maxPotions) {
+      this.ui.hint('Your potion bag is full!', 2);
+      return;
+    }
+    this.coins -= it.price;
+    it.sold = true;
+    this.ui.setCoins(this.coins, true);
+    this.audio.play('coin');
+    this.audio.play('pickup');
+    if (it.icon === 'potion') this.potions = Math.min(this.maxPotions, this.potions + 1);
+    else if (it.icon === 'heal') hero.hp = hero.maxHp;
+    else if (it.icon === 'heart') {
+      this.bonusHp += 20;
+      this.applyBlessings();
+      hero.hp = Math.min(hero.maxHp, hero.hp + 20);
+      this.ui.setHero(hero.def, this.heroName, hero.maxHp);
+      this.ui.setBlessings(this.blessings, BLESSINGS);
+      this.ui.setCoins(this.coins, false);
+    }
+    this.burst(hero.position.clone().setY(1.2), new THREE.Color(it.color), 30, 3);
+    if (it.icon === 'blessing') {
+      this.closeShop();
+      this.later(0.3, () => this.offerBlessings());
+      return;
+    }
+    this.ui.showShop(m.items, this.coins, (k) => this.buy(k), () => this.closeShop());
+  }
+
+  private closeShop(): void {
+    this.choosing = false;
+    this.input.clear();
+    this.ui.hideScreen();
+    this.ui.objective('Follow the arrow to the golden door');
+  }
+
+  private removeMerchant(): void {
+    const m = this.merchant;
+    if (!m) return;
+    this.scene.remove(m.who.root, m.props);
+    const i = this.crypt.colliders.boxes.indexOf(m.box);
+    if (i >= 0) this.crypt.colliders.boxes.splice(i, 1);
+    this.merchant = null;
   }
 
   // ───────────────────────── Room life ─────────────────────────
@@ -1325,6 +1467,7 @@ export class Game {
     this.step = 'cleared';
     if (LEVELS[this.level].boss) return this.onBossDefeated();
     this.givePathReward();
+    this.later(1.2, () => this.placeMerchant());
     this.pillars = Math.max(this.pillars, this.stage + 1);
     this.crypt.door.setProgress(this.pillars);
     this.crypt.door.open();
@@ -1635,6 +1778,7 @@ export class Game {
     const altarDist = hero.position.distanceTo(this.crypt.altar.position);
     const walked = hero.position.distanceTo(this.hallStart) > 0.4 && !(this.brazier && !this.brazier.lit);
     this.updateJob(dt);
+    this.updateMerchant(dt);
     if (this.step === 'explore' && altarDist < ALTAR_REACH + 1.5 && this.jobLeft() > 0 && (this.jobNag -= dt) < 0) {
       this.jobNag = 4;
       this.ui.hint(`The pillar is still asleep. ${this.jobIntro()}`, 3.5);
@@ -2328,7 +2472,7 @@ export class Game {
     hero.speedBoost = 1 + 0.12 * this.lvl('swift');
     hero.dodgeRecharge = Math.max(0.4, 1 - 0.2 * this.lvl('swift'));
     hero.powerRecharge = Math.max(0.3, 1 - 0.25 * this.lvl('surge'));
-    hero.maxHp = hero.def.maxHp + 30 * this.lvl('heart');
+    hero.maxHp = hero.def.maxHp + 30 * this.lvl('heart') + this.bonusHp;
     hero.hp = Math.min(hero.hp, hero.maxHp);
   }
 
@@ -2974,6 +3118,9 @@ export class Game {
       // Just under the torch, so it never hides behind the goal line at the top.
       const s = this.toScreen(this.brazier.position, -0.2);
       this.ui.prompt('<kbd>F</kbd> Light the torch', s.x, s.y + 8);
+    } else if (this.nearMerchant()) {
+      const s = this.toScreen(this.merchant!.who.position, 2.6);
+      this.ui.prompt('<kbd>F</kbd> Shop', s.x, s.y);
     } else if (this.nearLantern()) {
       const s = this.toScreen(this.nearLantern()!.at, -0.2);
       this.ui.prompt('<kbd>F</kbd> Light the lantern', s.x, s.y + 8);

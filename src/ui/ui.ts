@@ -46,6 +46,15 @@ export type FloatKind = 'damage' | 'crit' | 'hurt' | 'heal' | 'info' | 'block';
 const KEY_LABEL: Record<SlotKey, string> = { LMB: 'F', RMB: 'G', SPACE: 'Space', Q: 'R' };
 
 // Two small drawings of our own for things the icon set lacks.
+export interface ShopItem {
+  name: string;
+  text: string;
+  price: number;
+  icon: 'potion' | 'heal' | 'heart' | 'blessing';
+  color: string;
+  sold: boolean;
+}
+
 export interface PathOption {
   name: string;
   blurb: string;
@@ -433,6 +442,53 @@ export class Ui {
     this.focusFirst('.path');
   }
 
+  /** The travelling merchant's shop: a few things to spend coins on. */
+  showShop(items: ShopItem[], coins: number, onBuy: (i: number) => void, onLeave: () => void): void {
+    const art: Record<ShopItem['icon'], string> = {
+      potion: icon(POTION_PATH, 'icon', 'evenodd'),
+      heal: iconByName('regeneration'),
+      heart: iconByName('checkedShield'),
+      blessing: iconByName('starSwirl'),
+    };
+    const cards = items
+      .map((it, i) => {
+        const poor = !it.sold && it.price > coins;
+        return `<button type="button" class="bless shop-item${it.sold ? ' shop-item--sold' : ''}${poor ? ' shop-item--poor' : ''}" data-i="${i}" style="--c:${it.color}" ${it.sold || poor ? 'aria-disabled="true"' : ''}>
+          <span class="bless__key">${i + 1}</span>
+          <span class="bless__art">${art[it.icon]}</span>
+          <b class="bless__name">${it.name}</b>
+          <span class="bless__text">${it.text}</span>
+          <span class="shop-item__price">${it.sold ? 'Sold!' : `<i class="coin-dot"></i>${it.price}`}</span>
+        </button>`;
+      })
+      .join('');
+    this.setScreen(
+      'shop',
+      `<div class="bless-wrap shop-wrap" role="dialog" aria-modal="true" aria-labelledby="shop-title">
+        <p class="kicker">The travelling merchant</p>
+        <h2 id="shop-title" class="card__title card__title--big">Spend your coins</h2>
+        <p class="shop-purse">You have <i class="coin-dot"></i><b>${coins}</b> coins</p>
+        <div class="bless-row shop-row" style="--n:${items.length}">${cards}</div>
+        <button type="button" class="btn btn--ghost shop-leave">Done shopping</button>
+        <p class="bless-help">Press <kbd>1</kbd>–<kbd>${items.length}</kbd> to buy, <kbd>Esc</kbd> when you're done</p>
+      </div>`,
+    );
+    this.blessPick = (i: number): void => {
+      const it = items[i];
+      if (!it || it.sold || it.price > coins) {
+        this.handlers.sound('tick');
+        return;
+      }
+      onBuy(i);
+    };
+    this.shopLeave = onLeave;
+    this.screen.querySelectorAll<HTMLButtonElement>('.shop-item').forEach((el) => el.addEventListener('click', () => this.blessPick?.(Number(el.dataset.i))));
+    this.screen.querySelector('.shop-leave')!.addEventListener('click', () => onLeave());
+    this.focusFirst('.shop-item:not([aria-disabled]), .shop-leave');
+  }
+
+  private shopLeave: (() => void) | null = null;
+
   /** The big health bar for the Skeleton King, or null to hide it. */
   bossBar(name: string | null, fraction: number): void {
     let bar = this.root.querySelector<HTMLElement>('.boss-bar');
@@ -818,7 +874,12 @@ export class Ui {
   private onKey = (e: KeyboardEvent): void => {
     const name = this.screenName;
     if (e.target instanceof HTMLInputElement && e.key !== 'Escape') return;
-    if ((name === 'bless' || name === 'paths') && this.blessPick && /^[123]$/.test(e.key)) {
+    if (name === 'shop' && e.key === 'Escape') {
+      e.preventDefault();
+      this.shopLeave?.();
+      return;
+    }
+    if ((name === 'bless' || name === 'paths' || name === 'shop') && this.blessPick && /^[1234]$/.test(e.key)) {
       e.preventDefault();
       this.blessPick(Number(e.key) - 1);
       return;

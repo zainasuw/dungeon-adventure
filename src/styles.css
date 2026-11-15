@@ -2178,3 +2178,95 @@ body.touch-mode .hint {
 body.touch-mode button kbd {
   display: none;
 }
+
+/* ───────────── The merchant's shop ───────────── */
+
+.screen--shop {
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: radial-gradient(ellipse at 50% 45%, rgba(40, 30, 10, 0.55), rgba(4, 4, 7, 0.82) 70%);
+  backdrop-filter: blur(4px);
+}
+
+.shop-row {
+  grid-template-columns: repeat(var(--n), minmax(0, 1fr));
+}
+
+.shop-item {
+  min-height: 270px;
+}
+
+.shop-item__price {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: auto;
+  padding: 6px 14px;
+  border-radius: 999px;
+  background: rgba(255, 210, 58, 0.14);
+  font: 800 20px var(--sans);
+  color: var(--gold-bright);
+}
+
+.shop-purse {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  font: 600 18px var(--sans);
+  color: var(--ink);
+}
+
+.coin-dot {
+  display: inline-block;
+  width: 16px;
+  height: 16px;
+  border: 2px solid #a9781a;
+  border-radius: 50%;
+  background: #ffd23a;
+}
+
+/* Can't afford it: dimmed, with the price in red. */
+.shop-item--poor {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.shop-item--poor .shop-item__price {
+  color: #ff8a8a;
+  background: rgba(255, 90, 90, 0.12);
+}
+
+.shop-item--sold {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.shop-item--poor:hover,
+.shop-item--sold:hover {
+  transform: none;
+  box-shadow: var(--shadow);
+}
+
+.shop-leave {
+  margin-top: 4px;
+}
+
+@media (max-width: 860px) {
+  .shop-row {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 640px) {
+  .shop-row {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 640px) {
+  .shop-item {
+    min-height: 0;
+  }
+}
