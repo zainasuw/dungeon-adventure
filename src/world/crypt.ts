@@ -8,6 +8,8 @@ import { Runes, type RunePath } from './runes';
 import { Colliders, KitPlacer } from './static-world';
 import { Torches } from './torches';
 import { buildDungeon, type Encounter } from './dungeon';
+import { buildApproach } from './approach';
+import type { EnemyKind } from '../actors/enemy';
 
 /** Interior half extents. Walls sit on the boundary, one unit thick. */
 export const ROOM = { halfX: 16, halfZ: 12 };
@@ -81,6 +83,8 @@ interface Theme {
   half?: [number, number];
   /** Outside: a grass or dirt ground instead of tiles, and fences or trees instead of side walls. */
   outdoor?: { ground: string; edge: 'fence' | 'trees'; dirt: string[]; dirtChance: number };
+  /** The way in: an entrance room, a corridor to the hall and a side room with guards (see approach.ts). */
+  approach?: { side: 1 | -1; guards: EnemyKind[]; shout: string };
 }
 
 const SMALL_PLAIN = ['floor_tile_small', 'floor_tile_small', 'floor_tile_small', 'floor_tile_small_broken_A', 'floor_tile_small_broken_B', 'floor_tile_small_weeds_A', 'floor_tile_small_decorated'];
@@ -131,6 +135,7 @@ const THEMES: Theme[] = [
   },
   // 2. The Overgrown Hall: an old garden court, dirt and weeds, walls caved in.
   {
+    approach: { side: -1, guards: ['runt', 'skeleton'], shout: 'Skeletons in the old potting shed!' },
     floor: { large: 0.25, rocks: 0.25, dirt: 0.35, small: ['floor_tile_small_weeds_A', 'floor_tile_small_weeds_B', 'floor_tile_small_broken_A', 'floor_tile_small_broken_B'] },
     north: ['wall_broken', 'wall_cracked', 'wall', 'DOOR', 'wall_arched', 'wall_broken', 'wall_cracked'],
     west: ['wall_broken', 'wall_cracked', 'wall_arched', 'wall_broken', 'wall_cracked'],
@@ -171,6 +176,7 @@ const THEMES: Theme[] = [
   },
   // 3. The Frozen Library: long and narrow, walls of books, shelves making aisles down the room.
   {
+    approach: { side: 1, guards: ['skeleton', 'runt'], shout: 'The reading room has guards!' },
     half: [12, 16],
     floor: { large: 0.55, rocks: 0.05, dirt: 0, small: ['floor_tile_small_decorated', 'floor_tile_small_decorated', 'floor_tile_small', 'floor_tile_small_broken_A'] },
     north: ['wall_shelves', 'wall_window_closed'],
@@ -210,6 +216,7 @@ const THEMES: Theme[] = [
   },
   // 4. The Ember Deep: a forge. Grated floor, a ring of carved pillars, braziers and spike traps.
   {
+    approach: { side: -1, guards: ['runt', 'skeleton'], shout: 'Skeletons guard the forge store!' },
     floor: { large: 0.35, rocks: 0.15, dirt: 0, small: ['floor_tile_small_broken_A', 'floor_tile_small_broken_B', 'floor_tile_small'] },
     north: ['wall_pillar', 'wall_gated', 'wall', 'DOOR', 'wall', 'wall_gated', 'wall_pillar'],
     west: ['wall_gated', 'wall_pillar', 'wall', 'wall_pillar', 'wall_gated'],
@@ -276,6 +283,7 @@ const THEMES: Theme[] = [
   },
   // 6. The Moonlit Graveyard: outside under the moon, rows of graves, dead trees, a crypt.
   {
+    approach: { side: 1, guards: ['runt', 'runt'], shout: 'The graves are stirring!' },
     half: [20, 14],
     outdoor: { ground: '#25301f', edge: 'fence', dirt: ['hw_path_A', 'hw_path_B', 'hw_path_C'], dirtChance: 0.14 },
     floor: { large: 0, rocks: 0, dirt: 0, small: [] },
@@ -321,6 +329,7 @@ const THEMES: Theme[] = [
   },
   // 7. The Forest Clearing: a sunny clearing ringed by trees, a camp, rocks, and the castle wall with the door.
   {
+    approach: { side: -1, guards: ['runt', 'skeleton'], shout: 'Skeleton bandits at the old camp!' },
     half: [16, 14],
     outdoor: { ground: '#4a6b34', edge: 'trees', dirt: ['hw_path_A', 'hw_path_B'], dirtChance: 0.1 },
     floor: { large: 0, rocks: 0, dirt: 0, small: [] },
@@ -375,12 +384,15 @@ export function buildCrypt(assets: Assets, embers: Particles, themeIndex = 0): C
   const rng = createRng(1337 + themeIndex * 101);
   const kit = new KitPlacer(assets, group);
   const wallInset = 0.5;
-  const colliders = new Colliders({
-    minX: -hx + wallInset,
-    maxX: hx - wallInset,
-    minZ: -hz + wallInset,
-    maxZ: hz - wallInset,
-  });
+  const ap = theme.approach;
+  const colliders = ap
+    ? new Colliders({ minX: -24, maxX: 24, minZ: -hz - 10, maxZ: hz + 22 })
+    : new Colliders({
+        minX: -hx + wallInset,
+        maxX: hx - wallInset,
+        minZ: -hz + wallInset,
+        maxZ: hz - wallInset,
+      });
 
   const hazards = theme.hazards.map(([x, z]) => ({ x, z, half: 1.7 }));
   const isHazard = (x: number, z: number) => hazards.some((h) => Math.abs(h.x - x) < 1 && Math.abs(h.z - z) < 1);
@@ -396,27 +408,26 @@ export function buildCrypt(assets: Assets, embers: Particles, themeIndex = 0): C
     ground.receiveShadow = true;
     group.add(ground);
   }
-  for (let i = 0; i < hx / 2; i++) {
-    for (let j = 0; j < hz / 2; j++) {
-      const x = -hx + 2 + i * 4;
-      const z = -hz + 2 + j * 4;
-      if (out) {
-        if (rng() < out.dirtChance) kit.instance(pick(rng, out.dirt), x, 0, z, Math.floor(rng() * 4) * QUARTER, 1, false);
-        continue;
-      }
-      const r = rng();
-      const rot = Math.floor(rng() * 4) * QUARTER;
-      if (isHazard(x, z)) kit.instance('floor_tile_big_spikes', x, 0, z, 0, 1, false);
-      else if (themeIndex === 3 && (i + j) % 3 === 0) kit.instance('floor_tile_big_grate', x, 0, z, rot, 1, false);
-      else if (r < f.large) kit.instance('floor_tile_large', x, 0, z, rot, 1, false);
-      else if (r < f.large + f.rocks) kit.instance('floor_tile_large_rocks', x, 0, z, rot, 1, false);
-      else if (r < f.large + f.rocks + f.dirt) kit.instance('floor_dirt_large', x, 0, z, rot, 1, false);
-      else {
-        for (const [dx, dz] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) {
-          kit.instance(pick(rng, f.small), x + dx, 0, z + dz, Math.floor(rng() * 4) * QUARTER, 1, false);
-        }
+  const floorAt = (x: number, z: number, grate: boolean): void => {
+    if (out) {
+      if (rng() < out.dirtChance) kit.instance(pick(rng, out.dirt), x, 0, z, Math.floor(rng() * 4) * QUARTER, 1, false);
+      return;
+    }
+    const r = rng();
+    const rot = Math.floor(rng() * 4) * QUARTER;
+    if (isHazard(x, z)) kit.instance('floor_tile_big_spikes', x, 0, z, 0, 1, false);
+    else if (grate) kit.instance('floor_tile_big_grate', x, 0, z, rot, 1, false);
+    else if (r < f.large) kit.instance('floor_tile_large', x, 0, z, rot, 1, false);
+    else if (r < f.large + f.rocks) kit.instance('floor_tile_large_rocks', x, 0, z, rot, 1, false);
+    else if (r < f.large + f.rocks + f.dirt) kit.instance('floor_dirt_large', x, 0, z, rot, 1, false);
+    else {
+      for (const [dx, dz] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) {
+        kit.instance(pick(rng, f.small), x + dx, 0, z + dz, Math.floor(rng() * 4) * QUARTER, 1, false);
       }
     }
+  };
+  for (let i = 0; i < hx / 2; i++) {
+    for (let j = 0; j < hz / 2; j++) floorAt(-hx + 2 + i * 4, -hz + 2 + j * 4, themeIndex === 3 && (i + j) % 3 === 0);
   }
 
   // Walls: front faces point into the room. The near wall is a low ledge so it never hides the hero.
@@ -432,7 +443,10 @@ export function buildCrypt(assets: Assets, embers: Particles, themeIndex = 0): C
   kit.instance('wall_corner', hx, 0, -hz, 0);
   kit.instance('wall_corner', -hx, 0, -hz, QUARTER);
   if (!out) {
-    for (let i = 0; i < across; i++) kit.instance('wall_half', -hx + 4 + i * 4, 0, hz, Math.PI);
+    for (let i = 0; i < across; i++) {
+      const x = -hx + 4 + i * 4;
+      if (!(ap && x === 0)) kit.instance('wall_half', x, 0, hz, Math.PI);
+    }
     for (let i = 0; i < along; i++) {
       kit.instance(palette(theme.west, i), -hx, 0, -hz + 4 + i * 4, QUARTER);
       kit.instance(palette(theme.east, i), hx, 0, -hz + 4 + i * 4, -QUARTER);
@@ -445,7 +459,11 @@ export function buildCrypt(assets: Assets, embers: Particles, themeIndex = 0): C
       kit.instance(i % 3 === 1 ? 'hw_fence_broken' : 'hw_fence', -hx, 0, -hz + 4 + i * 4, QUARTER);
       kit.instance(i % 3 === 2 ? 'hw_fence_broken' : 'hw_fence', hx, 0, -hz + 4 + i * 4, -QUARTER);
     }
-    for (let i = 0; i < across; i++) kit.instance(i === Math.floor(across / 2) ? 'hw_fence_gate' : 'hw_fence', -hx + 4 + i * 4, 0, hz, Math.PI);
+    for (let i = 0; i < across; i++) {
+      const x = -hx + 4 + i * 4;
+      if (ap && x === 0) continue;
+      kit.instance(i === Math.floor(across / 2) ? 'hw_fence_gate' : 'hw_fence', x, 0, hz, Math.PI);
+    }
     for (const [x, z] of [[-hx, hz], [hx, hz], [-hx, -hz + 2], [hx, -hz + 2]]) kit.instance('hw_fence_pillar', x, 0, z, 0);
     for (let k = 0; k < 10; k++) {
       const side = k % 2 ? 1 : -1;
@@ -457,7 +475,7 @@ export function buildCrypt(assets: Assets, embers: Particles, themeIndex = 0): C
     for (let z = -hz + 1.5; z <= hz; z += 3.6) {
       for (const side of [-1, 1]) kit.instance(pick(rng, trees), side * (hx + 1.6 + rng() * 1.2), 0, z, rng() * 6, 3.4 + rng() * 0.8);
     }
-    for (let x = -hx + 2; x <= hx - 2; x += 4.2) kit.instance(pick(rng, ['hx_rock_single_A', 'hx_rock_single_B', 'hx_rock_single_C']), x + rng(), 0, hz + 1 + rng(), rng() * 6, 2 + rng());
+    for (let x = -hx + 2; x <= hx - 2; x += 4.2) if (!(ap && Math.abs(x) < 3)) kit.instance(pick(rng, ['hx_rock_single_A', 'hx_rock_single_B', 'hx_rock_single_C']), x + rng(), 0, hz + 1 + rng(), rng() * 6, 2 + rng());
   }
 
   // A short corridor behind the golden door, for walking through to the next hall.
@@ -495,6 +513,23 @@ export function buildCrypt(assets: Assets, embers: Particles, themeIndex = 0): C
   };
   const solid = (name: string, x: number, z: number, rot = 0, scale = 1) => colliders.addObject(kit.single(name, x, 0, z, rot, scale));
   theme.props(kit, solid, torches, top, (o) => colliders.addObject(o));
+  const way = ap
+    ? buildApproach({
+        kit,
+        colliders,
+        rng,
+        hx,
+        hz,
+        style: out ? (out.edge === 'fence' ? 'fence' : 'trees') : 'stone',
+        side: ap.side,
+        floor: (x, z) => floorAt(x, z, false),
+        torches,
+        top,
+        guards: ap.guards,
+        shout: ap.shout,
+      })
+    : null;
+  if (way) colliders.areas = way.areas;
 
   // Wall torches on the walls that face the camera.
   const torchSpots: [number, number, number][] = [
@@ -552,19 +587,19 @@ export function buildCrypt(assets: Assets, embers: Particles, themeIndex = 0): C
     torches,
     altar,
     door,
-    heroStart: new THREE.Vector3(0, 0, hz - 6.6),
+    heroStart: way ? way.heroStart : new THREE.Vector3(0, 0, hz - 6.6),
     dormant: theme.dormant.map((d) => ({ position: free(...d.position), facing: d.facing })),
     spawnPoints: theme.spawns.map(([x, z]) => free(x, z)),
     theme: themeIndex,
     hazards,
-    crateSpots: theme.crates.map(([x, z]) => free(x, z)),
-    chest: { position: new THREE.Vector3(theme.chest[0], 0, theme.chest[1]), facing: theme.chest[2] },
-    halfX: hx,
-    halfZ: hz,
+    crateSpots: [...theme.crates.map(([x, z]) => free(x, z)), ...(way ? way.crateSpots : [])],
+    chest: way ? way.chest : { position: new THREE.Vector3(theme.chest[0], 0, theme.chest[1]), facing: theme.chest[2] },
+    halfX: way ? (way.all.x1 - way.all.x0) / 2 : hx,
+    halfZ: way ? (way.all.z1 - way.all.z0) / 2 : hz,
     outdoor: !!out,
     doorAt: new THREE.Vector3(0, 0, -hz),
-    center: new THREE.Vector3(),
-    connected: false,
-    encounters: [],
+    center: way ? new THREE.Vector3((way.all.x0 + way.all.x1) / 2, 0, (way.all.z0 + way.all.z1) / 2) : new THREE.Vector3(),
+    connected: !!way,
+    encounters: way ? [way.encounter] : [],
   };
 }
