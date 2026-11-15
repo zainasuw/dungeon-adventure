@@ -231,6 +231,22 @@ export class Game {
     this.rig.snap(new THREE.Vector3(0, 0, 0));
   }
 
+  /**
+   * The first look after loading: the camera starts close on the glowing pillar
+   * and glides back to show the four heroes, who wave one after another.
+   */
+  reveal(): void {
+    this.rig.yaw = 0;
+    this.rig.pitch = THREE.MathUtils.degToRad(24);
+    this.rig.distance = 4.5;
+    this.rig.snap(new THREE.Vector3(0, 2.6, 0));
+    this.lineup.forEach((h, i) => {
+      window.setTimeout(() => {
+        if (this.phase === 'title') h.animator.play('Cheer', { loop: false, fade: 0.2, restart: true });
+      }, 700 + i * 220);
+    });
+  }
+
   start(): void {
     this.last = performance.now();
     requestAnimationFrame(this.frame);

@@ -8,14 +8,36 @@ import { Game } from './game';
 const loading = document.getElementById('loading')!;
 const fill = document.getElementById('loading-fill')!;
 const text = document.getElementById('loading-text')!;
+const tip = document.getElementById('loading-tip')!;
+
+const TIPS = [
+  'Tip: hold <b>F</b> to keep swinging.',
+  'Tip: a red ring means a skeleton is about to swing. Press <b>Space</b> to dodge!',
+  'Tip: follow the golden arrow on the floor.',
+  'Tip: press <b>H</b> to drink a potion.',
+  'Tip: Easy mode is perfect for kids.',
+];
+let tipIndex = 0;
+const tipTimer = window.setInterval(() => {
+  tipIndex = (tipIndex + 1) % TIPS.length;
+  tip.style.opacity = '0';
+  window.setTimeout(() => {
+    tip.innerHTML = TIPS[tipIndex];
+    tip.style.opacity = '1';
+  }, 300);
+}, 2600);
 
 async function boot(): Promise<void> {
   const assets = new Assets();
   await assets.load((fraction) => {
-    fill.style.transform = `scaleX(${fraction})`;
+    fill.style.transform = `scaleX(${Math.max(0.02, fraction)})`;
+    text.textContent = `Lighting the torches… ${Math.round(fraction * 100)}%`;
   });
+  text.textContent = 'Ready!';
   const game = new Game(document.getElementById('viewport')!, document.getElementById('ui')!, assets);
   game.start();
+  game.reveal();
+  window.clearInterval(tipTimer);
   if (import.meta.env.DEV) Object.assign(window, { game });
   loading.classList.add('loading--done');
   loading.addEventListener('transitionend', () => loading.remove(), { once: true });

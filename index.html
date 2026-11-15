@@ -13,9 +13,13 @@
       <div id="viewport"></div>
       <div id="ui"></div>
       <div id="loading" class="loading" role="status" aria-live="polite">
+        <p class="loading__kicker">A 3D dungeon adventure</p>
         <h1 class="loading__title">Dungeon Adventure</h1>
-        <div class="loading__bar" aria-hidden="true"><span id="loading-fill"></span></div>
-        <p class="loading__hint" id="loading-text">Lighting the torches…</p>
+        <div class="loading__bottom">
+          <div class="loading__bar" aria-hidden="true"><span id="loading-fill"></span></div>
+          <p class="loading__hint" id="loading-text">Lighting the torches…</p>
+          <p class="loading__tip" id="loading-tip">Tip: hold <b>F</b> to keep swinging.</p>
+        </div>
       </div>
     </div>
     <script type="module" src="/src/main.ts"></script>
