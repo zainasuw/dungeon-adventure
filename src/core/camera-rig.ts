@@ -42,6 +42,14 @@ export class CameraRig {
     this.clampFocus();
   }
 
+  /** Jumps straight to the goal angle and distance (a cut, not a glide). */
+  jumpToGoal(): void {
+    this.yaw = this.goal.yaw;
+    this.pitch = this.goal.pitch;
+    this.distance = this.goal.distance;
+    this.pull = 1;
+  }
+
   /** Eases to a new angle and distance. Angles in degrees. */
   setView(yawDeg: number, pitchDeg: number, distance: number): void {
     this.goal.yaw = THREE.MathUtils.degToRad(yawDeg);
@@ -60,7 +68,10 @@ export class CameraRig {
   }
 
   update(dt: number, time: number, target: THREE.Vector3): void {
-    this.yaw = damp(this.yaw, this.goal.yaw, 4, dt);
+    // Turn the short way round. The first-person view lets the angle run past a full
+    // circle; easing straight back would spin the camera through the walls.
+    const turn = Math.atan2(Math.sin(this.goal.yaw - this.yaw), Math.cos(this.goal.yaw - this.yaw));
+    this.yaw = this.goal.yaw - turn + turn * (1 - Math.exp(-4 * dt));
     this.pitch = damp(this.pitch, this.goal.pitch, 4, dt);
     this.distance = damp(this.distance, this.goal.distance, 4, dt);
     this.focus.x = damp(this.focus.x, target.x, this.followRate, dt);

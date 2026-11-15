@@ -220,10 +220,18 @@ export interface SaveData {
 }
 
 const SAVE_KEY = 'dungeon-adventure:quest';
+// The quest lives only as long as this browser tab: a refresh picks it straight
+// back up, but closing the game and opening a fresh link starts a new game.
+// Older versions kept it forever in localStorage; forget that copy.
+try {
+  localStorage.removeItem(SAVE_KEY);
+} catch {
+  // Storage can be off; nothing to forget then.
+}
 
 export function loadSave(): SaveData | null {
   try {
-    const raw = localStorage.getItem(SAVE_KEY);
+    const raw = sessionStorage.getItem(SAVE_KEY);
     if (!raw) return null;
     const data = JSON.parse(raw) as SaveData;
     return typeof data.level === 'number' && data.level < LEVELS.length ? data : null;
@@ -234,7 +242,7 @@ export function loadSave(): SaveData | null {
 
 export function writeSave(data: SaveData): void {
   try {
-    localStorage.setItem(SAVE_KEY, JSON.stringify(data));
+    sessionStorage.setItem(SAVE_KEY, JSON.stringify(data));
   } catch {
     // Private windows can refuse storage; the game still plays.
   }
@@ -242,7 +250,7 @@ export function writeSave(data: SaveData): void {
 
 export function clearSave(): void {
   try {
-    localStorage.removeItem(SAVE_KEY);
+    sessionStorage.removeItem(SAVE_KEY);
   } catch {
     // Nothing to clear.
   }

@@ -456,6 +456,11 @@ export class Game {
    * and glides back to show the four heroes, who wave one after another.
    */
   reveal(): void {
+    // A refresh in the middle of a quest goes straight back in, no menu stop.
+    if (KEEP_PROGRESS && loadSave()) {
+      this.continueQuest();
+      return;
+    }
     this.rig.yaw = 0;
     this.rig.pitch = THREE.MathUtils.degToRad(24);
     this.rig.distance = 4.5;
@@ -482,7 +487,11 @@ export class Game {
 
   // ───────────────────────── Menus and flow ─────────────────────────
 
+  /** Set when leaving the game for a menu: the camera cuts instead of gliding. */
+  private cutToMenu = false;
+
   private openTitle(): void {
+    this.cutToMenu = this.phase !== 'title' && this.phase !== 'select';
     if (this.phase === 'play' && this.step !== 'exiting') this.saveProgress();
     this.phase = 'title';
     this.paused = false;
@@ -497,6 +506,7 @@ export class Game {
   }
 
   private openSelect(): void {
+    this.cutToMenu = this.phase !== 'title' && this.phase !== 'select';
     this.paused = false;
     this.ui.showHud(false);
     this.ui.clearWorldUi();
@@ -709,8 +719,8 @@ export class Game {
   }
 
   /**
-   * Saves the quest on this device (hall, route, coins, blessings), so the
-   * title can offer Continue. KEEP_PROGRESS turns it off.
+   * Saves the quest for this browser tab (hall, route, coins, blessings), so a
+   * refresh drops you back in. Closing the tab forgets it. KEEP_PROGRESS turns it off.
    */
   private saveProgress(): void {
     if (!KEEP_PROGRESS) return;
@@ -2016,6 +2026,14 @@ export class Game {
       }
       const title = this.phase === 'title';
       this.rig.setView(title ? Math.sin(t * 0.25) * 4 : 0, title ? 10 : 8, title ? 9.8 : 8.6);
+      if (this.cutToMenu) {
+        // Coming back from the dungeon: cut straight to the menu shot, never glide through walls.
+        this.cutToMenu = false;
+        this.rig.jumpToGoal();
+        this.rig.snap(this.camTarget.set(0, title ? 1.25 : 0.95, LINEUP_Z + 0.3));
+        this.camera.fov = this.fovFor(36);
+        this.camera.updateProjectionMatrix();
+      }
       // On a narrow phone only two heroes fit: follow the one being looked at.
       const pick = !title && this.camera.aspect < 1 ? this.lineup[this.chosen] : undefined;
       this.camX = THREE.MathUtils.damp(this.camX, pick ? pick.position.x * 0.85 : 0, 6, dt);
