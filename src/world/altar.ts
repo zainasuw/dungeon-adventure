@@ -122,6 +122,19 @@ export class Altar {
     this.beam.visible = true;
   }
 
+  /** Back to a dormant crystal for a fresh room. */
+  reset(): void {
+    this.target = 0;
+    this.awake = 0;
+    this.charge = 0;
+    this.beam.visible = false;
+  }
+
+  /** Recolors the dormant crystal so each hall's pillar has its own hue. */
+  setDormantColor(color: THREE.ColorRepresentation): void {
+    this.dormantColor.set(color);
+  }
+
   update(time: number, dt: number): void {
     this.awake = damp(this.awake, this.target, 2.2, dt);
     const bob = Math.sin(time * 1.6) * 0.12;

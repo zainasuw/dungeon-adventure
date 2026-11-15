@@ -1,17 +1,61 @@
 import * as THREE from 'three';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
-import { Character } from './actors/character';
 import { HERO_CLASSES, type Ability, type ComboStep, type HeroClassId } from './actors/classes';
+import { Enemy, ENEMIES, type EnemyKind } from './actors/enemy';
 import { Hero, type HeroEvents, type HeroInput } from './actors/hero';
 import type { Assets } from './core/assets';
 import { CameraRig } from './core/camera-rig';
 import { Input } from './core/input';
+import { Audio } from './game/audio';
+import { clearSave, DIFFICULTIES, LEVELS, loadSave, MAX_POTIONS, writeSave, type Difficulty, type DifficultyId, type SaveData } from './game/levels';
 import { MOODS, type Mood } from './render/moods';
 import { Renderer } from './render/renderer';
 import { applySeeThrough, seeThrough } from './render/see-through';
-import { LookDev } from './ui/lookdev';
+import { Ui, type FloatKind, type QuestStats } from './ui/ui';
 import { buildCrypt, ROOM, type Crypt } from './world/crypt';
 import { Particles } from './world/particles';
+
+type Phase = 'title' | 'select' | 'play' | 'dead' | 'victory';
+/** Steps inside one hall. */
+type Step = 'explore' | 'claiming' | 'fight' | 'cleared' | 'exiting';
+
+interface Projectile {
+  mesh: THREE.Object3D;
+  velocity: THREE.Vector3;
+  damage: number;
+  radius: number;
+  life: number;
+  hostile: boolean;
+  color: THREE.Color;
+  heal: number;
+  hit: Set<Enemy>;
+  pierce: boolean;
+}
+
+interface Zone {
+  kind: 'sanctuary' | 'smoke';
+  position: THREE.Vector3;
+  radius: number;
+  life: number;
+  tick: number;
+  healPerSecond: number;
+  damagePerSecond: number;
+  mesh: THREE.Mesh;
+}
+
+interface Potion {
+  object: THREE.Group;
+  base: THREE.Vector3;
+}
+
+interface Timer {
+  at: number;
+  run: () => void;
+}
+
+const REDUCED_MOTION = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+const PLAY_VIEW = { yaw: 0, pitch: 58, distance: 24 };
+const ALTAR_REACH = 3.7;
 
 export class Game {
   readonly scene = new THREE.Scene();
@@ -20,14 +64,43 @@ export class Game {
   readonly renderer: Renderer;
   readonly input: Input;
   readonly crypt: Crypt;
+  readonly ui: Ui;
+  readonly audio = new Audio();
   /** Additive particles: embers, sparks, magic. */
   readonly glow = new Particles(4000, true, 0.1);
   /** Alpha-blended particles: dust, smoke, bone shards. */
   readonly dust = new Particles(1500, false, 0.35);
 
-  mood: Mood = MOODS[0];
+  mood: Mood = MOODS[1];
   hero!: Hero;
-  private readonly sleepers: Character[] = [];
+  phase: Phase = 'title';
+  step: Step = 'explore';
+  paused = false;
+
+  // The quest in progress.
+  private heroName = '';
+  private difficulty: Difficulty = DIFFICULTIES.easy;
+  private level = 0;
+  private pillars = 0;
+  private potions = 1;
+  private levelStartPotions = 1;
+  private kills = 0;
+  private potionsUsed = 0;
+  private playTime = 0;
+
+  private enemies: Enemy[] = [];
+  private readonly rings = new Map<Enemy, THREE.Mesh>();
+  private waves: EnemyKind[][] = [];
+  private waveCooldown = 0;
+  private projectiles: Projectile[] = [];
+  private zones: Zone[] = [];
+  private pickups: Potion[] = [];
+  private timers: Timer[] = [];
+  private renew = { left: 0, rate: 0 };
+  private hitStop = 0;
+  private deadTimer = 0;
+  private frameCount = 0;
+
   private readonly hemi = new THREE.HemisphereLight();
   private readonly moon = new THREE.DirectionalLight();
   private readonly heroLight = new THREE.PointLight('#ffd9a8', 9, 11, 2);
@@ -35,6 +108,10 @@ export class Game {
   private readonly dustColor = new THREE.Color('#d9c7a0');
   private readonly heroColor = new THREE.Color();
   private readonly heroHot = new THREE.Color();
+  private readonly white = new THREE.Color('#ffffff');
+  private readonly gold = new THREE.Color('#ffc35a');
+  private readonly red = new THREE.Color('#ff4040');
+  private readonly heal = new THREE.Color('#7dffa0');
   private time = 0;
   private last = 0;
   private dustTimer = 0;
@@ -45,6 +122,8 @@ export class Game {
   private readonly forward = new THREE.Vector3();
   private readonly right = new THREE.Vector3();
   private readonly projected = new THREE.Vector3();
+  private readonly camTarget = new THREE.Vector3();
+  private readonly tmp = new THREE.Vector3();
   private readonly heroInput: HeroInput = {
     move: new THREE.Vector3(),
     aim: new THREE.Vector3(),
@@ -59,10 +138,18 @@ export class Game {
     dash: (kind, from, to) => this.onDash(kind, from, to),
   };
 
-  constructor(container: HTMLElement, ui: HTMLElement, private readonly assets: Assets) {
+  private readonly orbGeometry = new THREE.IcosahedronGeometry(0.2, 1);
+  private readonly knifeGeometry = new THREE.BoxGeometry(0.08, 0.06, 0.55);
+  private readonly ringGeometry = new THREE.RingGeometry(0.82, 1, 48);
+  private readonly discGeometry = new THREE.CircleGeometry(1, 48);
+
+  constructor(container: HTMLElement, uiRoot: HTMLElement, private readonly assets: Assets) {
     this.renderer = new Renderer(container, this.scene, this.camera);
+    // Input listens before the UI, so the UI can swallow a key press (Esc to resume).
     this.input = new Input(this.renderer.gl.domElement);
     this.rig = new CameraRig(this.camera);
+    // Don't follow the hero right up to the south wall: it would fill the screen.
+    this.rig.bounds.maxZ = 4.5;
 
     const pmrem = new THREE.PMREMGenerator(this.renderer.gl);
     this.scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
@@ -85,59 +172,30 @@ export class Game {
     this.crypt = buildCrypt(assets, this.glow);
     this.scene.add(this.crypt.group, this.glow.points, this.dust.points);
 
-    const sleeperModels = ['Skeleton_Minion', 'Skeleton_Warrior', 'Skeleton_Rogue', 'Skeleton_Minion'] as const;
-    this.crypt.dormant.forEach((spot, i) => {
-      const skeleton = new Character(assets, sleeperModels[i], assets.skeletonClips);
-      skeleton.position.copy(spot.position);
-      skeleton.facing = spot.facing;
-      skeleton.setGlow((n) => n.endsWith('_Eyes'), '#ffb83a', 4);
-      skeleton.animator.play('Skeletons_Inactive_Floor_Pose');
-      this.scene.add(skeleton.root);
-      this.sleepers.push(skeleton);
+    this.ui = new Ui(uiRoot, {
+      newQuest: () => this.openSelect(),
+      continueQuest: () => this.continueQuest(),
+      previewHero: (id) => this.previewHero(id),
+      startQuest: (id, name, difficulty) => this.startQuest(id, name, difficulty),
+      backToTitle: () => this.openTitle(),
+      resume: () => this.setPaused(false),
+      restartLevel: () => this.restartLevel(),
+      changeHero: () => this.openSelect(),
+      toggleMute: () => {
+        this.audio.setMuted(!this.audio.muted);
+        return this.audio.muted;
+      },
+      pause: () => this.setPaused(true),
+    });
+
+    window.addEventListener('blur', () => {
+      if (this.phase === 'play' && !this.paused) this.setPaused(true);
     });
 
     this.setHero('warrior');
-    this.rig.snap(this.hero.position);
-    this.setMood(MOODS[0]);
-
-    new LookDev(ui, {
-      hero: (id) => this.setHero(id),
-      mood: (i) => this.setMood(MOODS[i]),
-      camera: (preset) => this.rig.setView(preset.yaw, preset.pitch, preset.distance),
-    });
-  }
-
-  setHero(id: HeroClassId): void {
-    const previous = this.hero;
-    const hero = new Hero(this.assets, HERO_CLASSES[id]);
-    hero.position.copy(previous ? previous.position : this.crypt.heroStart);
-    hero.facing = previous ? previous.facing : Math.PI;
-    if (previous) this.scene.remove(previous.root);
-    this.scene.add(hero.root);
-    this.hero = hero;
-    this.heroColor.set(hero.def.color);
-    this.heroHot.set(hero.def.hot);
-    this.burst(hero.position.clone().setY(1), this.heroColor, 40, 4);
-  }
-
-  setMood(mood: Mood): void {
-    this.mood = mood;
-    this.scene.background = new THREE.Color(mood.background);
-    this.fog.color.set(mood.fog.color);
-    this.fog.density = mood.fog.density;
-    this.hemi.color.set(mood.hemi.sky);
-    this.hemi.groundColor.set(mood.hemi.ground);
-    this.hemi.intensity = mood.hemi.intensity;
-    this.moon.color.set(mood.moon.color);
-    this.moon.intensity = mood.moon.intensity;
-    this.scene.environmentIntensity = mood.environment;
-    this.heroLight.intensity = mood.heroLight;
-    for (const material of this.assets.kitMaterials) {
-      if (material instanceof THREE.MeshStandardMaterial) material.color.set(mood.stone);
-    }
-    this.crypt.torches.applyMood(mood);
-    this.crypt.runes.setColor(mood.rune.color, mood.rune.intensity);
-    this.renderer.applyMood(mood);
+    this.setupLevel(0, false);
+    this.openTitle();
+    this.rig.snap(new THREE.Vector3(0, 0, 0));
   }
 
   start(): void {
@@ -145,9 +203,301 @@ export class Game {
     requestAnimationFrame(this.frame);
   }
 
+  // ───────────────────────── Menus and flow ─────────────────────────
+
+  private openTitle(): void {
+    if (this.phase === 'play' && this.step !== 'exiting') this.saveProgress();
+    this.phase = 'title';
+    this.paused = false;
+    this.ui.showHud(false);
+    this.ui.clearWorldUi();
+    const save = loadSave();
+    this.setupLevel(save ? save.level : 0, false);
+    this.hero.root.visible = false;
+    this.ui.showTitle(save);
+  }
+
+  private openSelect(): void {
+    this.phase = 'select';
+    this.paused = false;
+    this.ui.showHud(false);
+    this.ui.clearWorldUi();
+    this.setupLevel(0, false);
+    this.hero.root.visible = true;
+    const id = this.hero.def.id;
+    this.previewHero(id, false);
+    this.ui.showSelect(id, this.heroName, this.difficulty.id);
+  }
+
+  private previewHero(id: HeroClassId, cheer = true): void {
+    if (this.hero.def.id !== id) this.setHero(id);
+    this.hero.root.visible = true;
+    this.hero.position.set(0, 0, 3.1);
+    this.hero.facing = 0;
+    if (cheer) this.hero.animator.play('Cheer', { loop: false, fade: 0.15, restart: true });
+    this.audio.play('click');
+  }
+
+  private startQuest(id: HeroClassId, name: string, difficulty: DifficultyId): void {
+    this.heroName = name;
+    this.difficulty = DIFFICULTIES[difficulty];
+    if (this.hero.def.id !== id) this.setHero(id);
+    this.level = 0;
+    this.pillars = 0;
+    this.potions = 1;
+    this.kills = 0;
+    this.potionsUsed = 0;
+    this.playTime = 0;
+    this.enterPlay();
+  }
+
+  private continueQuest(): void {
+    const save = loadSave();
+    if (!save) return this.openSelect();
+    this.heroName = save.name;
+    this.difficulty = DIFFICULTIES[save.difficulty] ?? DIFFICULTIES.normal;
+    this.setHero(save.hero);
+    this.level = save.level;
+    this.pillars = save.level;
+    this.potions = save.potions;
+    this.kills = save.kills;
+    this.potionsUsed = save.potionsUsed;
+    this.playTime = save.time;
+    this.enterPlay();
+  }
+
+  private enterPlay(): void {
+    this.ui.hideScreen();
+    this.ui.setHero(this.hero.def, this.heroName, this.hero.maxHp);
+    this.ui.showHud(true);
+    this.phase = 'play';
+    this.paused = false;
+    this.setupLevel(this.level, true);
+    this.rig.snap(this.hero.position);
+    this.saveProgress();
+  }
+
+  private restartLevel(): void {
+    this.potions = Math.max(this.levelStartPotions, 1);
+    this.ui.hideScreen();
+    this.ui.setHero(this.hero.def, this.heroName, this.hero.maxHp);
+    this.ui.showHud(true);
+    this.phase = 'play';
+    this.paused = false;
+    this.setupLevel(this.level, true);
+  }
+
+  private setPaused(paused: boolean): void {
+    if (this.phase !== 'play') return;
+    this.paused = paused;
+    this.input.endFrame();
+    if (paused) {
+      this.ui.prompt(null);
+      this.ui.showPause();
+    } else {
+      this.ui.hideScreen();
+    }
+  }
+
+  private saveProgress(): void {
+    writeSave({
+      hero: this.hero.def.id,
+      name: this.heroName,
+      difficulty: this.difficulty.id,
+      level: this.level,
+      potions: this.levelStartPotions,
+      kills: this.kills,
+      potionsUsed: this.potionsUsed,
+      time: this.playTime,
+    } satisfies SaveData);
+  }
+
+  private stats(): QuestStats {
+    return {
+      heroName: this.heroName,
+      hero: this.hero.def,
+      difficulty: this.difficulty.id,
+      level: this.level,
+      pillars: this.pillars,
+      kills: this.kills,
+      potionsUsed: this.potionsUsed,
+      time: this.playTime,
+    };
+  }
+
+  // ───────────────────────── Halls ─────────────────────────
+
+  /** Builds hall `index`. With `live`, the hero is placed and the hall begins. */
+  private setupLevel(index: number, live: boolean): void {
+    const level = LEVELS[index];
+    this.level = index;
+    this.clearActors();
+    this.setMood(MOODS[level.mood]);
+    this.crypt.altar.reset();
+    this.crypt.altar.setDormantColor(level.crystal);
+    this.crypt.door.reset(index);
+
+    this.crypt.dormant.forEach((spot, i) => {
+      const kind = level.sleepers[i];
+      if (!kind) return;
+      const enemy = this.spawnEnemy(kind, spot.position);
+      enemy.facing = spot.facing;
+      enemy.sleep();
+    });
+    this.waves = level.waves.map((w) => [...w]);
+    if (this.difficulty.dropLastWave && this.waves.length > 1) this.waves.pop();
+
+    if (!live) return;
+    for (const [x, z] of level.potions) this.dropPotion(new THREE.Vector3(x, 0, z));
+    this.levelStartPotions = this.potions;
+    this.step = 'explore';
+    this.hero.revive();
+    this.hero.invulnerable = 0;
+    this.hero.root.visible = true;
+    this.hero.position.copy(this.crypt.heroStart);
+    this.hero.facing = Math.PI;
+    this.hero.velocity.set(0, 0, 0);
+    this.hero.animator.play('Idle', { fade: 0 });
+    this.renew.left = 0;
+    this.rig.setView(PLAY_VIEW.yaw, PLAY_VIEW.pitch, PLAY_VIEW.distance);
+    this.ui.setQuest(index, this.pillars);
+    this.ui.objective('Walk to the glowing altar and take the pillar');
+    this.ui.banner(`Hall ${index + 1} of 4`, level.hall, `Guarding the Pillar of ${level.pillar}`);
+    this.ui.fade(false);
+  }
+
+  private clearActors(): void {
+    for (const e of this.enemies) this.scene.remove(e.root);
+    for (const ring of this.rings.values()) this.scene.remove(ring);
+    for (const p of this.projectiles) this.scene.remove(p.mesh);
+    for (const z of this.zones) this.scene.remove(z.mesh);
+    for (const p of this.pickups) this.scene.remove(p.object);
+    this.enemies = [];
+    this.rings.clear();
+    this.projectiles = [];
+    this.zones = [];
+    this.pickups = [];
+    this.timers = [];
+    this.ui.clearWorldUi();
+  }
+
+  private spawnEnemy(kind: EnemyKind, at: THREE.Vector3): Enemy {
+    const enemy = new Enemy(this.assets, ENEMIES[kind], this.difficulty.enemyHp);
+    enemy.position.copy(at);
+    this.scene.add(enemy.root);
+    const ring = new THREE.Mesh(
+      this.ringGeometry,
+      new THREE.MeshBasicMaterial({ color: '#ff2a2a', transparent: true, opacity: 0, depthWrite: false, blending: THREE.AdditiveBlending }),
+    );
+    ring.rotation.x = -Math.PI / 2;
+    ring.position.y = 0.04;
+    ring.visible = false;
+    this.scene.add(ring);
+    this.rings.set(enemy, ring);
+    this.enemies.push(enemy);
+    return enemy;
+  }
+
+  private claimPillar(): void {
+    this.step = 'fight';
+    this.crypt.altar.awaken();
+    this.burst(this.crypt.altar.position.clone().setY(2.8), this.gold, 80, 6);
+    this.shake(0.35);
+    this.audio.play('pillar');
+    this.ui.objective('The skeletons are waking up! Defeat them all');
+    this.enemies.forEach((e, i) => {
+      if (e.state !== 'dormant') return;
+      this.later(0.35 + i * 0.35, () => {
+        if (!e.alive) return;
+        e.rise(false);
+        this.audio.play('rise');
+        this.puff(e.position, 14);
+      });
+    });
+    this.waveCooldown = 4;
+  }
+
+  private spawnWave(kinds: EnemyKind[]): void {
+    const points = [...this.crypt.spawnPoints]
+      .filter((p) => p.distanceTo(this.hero.position) > 4.5)
+      .sort(() => Math.random() - 0.5);
+    kinds.forEach((kind, i) => {
+      const at = points[i % points.length].clone().add(new THREE.Vector3((Math.random() - 0.5) * 1.5, 0, (Math.random() - 0.5) * 1.5));
+      this.later(i * 0.4, () => {
+        const enemy = this.spawnEnemy(kind, at);
+        enemy.facing = Math.atan2(this.hero.position.x - at.x, this.hero.position.z - at.z);
+        enemy.rise(true);
+        this.puff(at, 22);
+        this.audio.play('rise');
+      });
+    });
+  }
+
+  private onCleared(): void {
+    this.step = 'cleared';
+    this.pillars = Math.max(this.pillars, this.level + 1);
+    this.crypt.door.setProgress(this.pillars);
+    this.crypt.door.open();
+    this.ui.setQuest(this.level, this.pillars);
+    this.audio.play('clear');
+    this.later(0.6, () => this.audio.play('door'));
+    const last = this.level === LEVELS.length - 1;
+    this.ui.banner('Pillar claimed', `Pillar of ${LEVELS[this.level].pillar}`, last ? 'All four pillars are awake!' : `${this.pillars} of 4 pillars awake`);
+    this.ui.objective(last ? 'The way out is open! Walk through the golden door' : 'Walk through the golden door');
+    if (this.hero.state === 'free') this.hero.animator.play('Cheer', { loop: false, fade: 0.15, restart: true });
+  }
+
+  private exitHall(): void {
+    this.step = 'exiting';
+    this.ui.prompt(null);
+    this.ui.fade(true);
+    if (this.level === LEVELS.length - 1) {
+      this.later(0.8, () => this.win());
+      return;
+    }
+    this.later(0.8, () => {
+      this.level += 1;
+      this.potions = Math.min(MAX_POTIONS, this.potions);
+      this.setupLevel(this.level, true);
+      this.rig.snap(this.hero.position);
+      this.saveProgress();
+    });
+  }
+
+  private win(): void {
+    this.phase = 'victory';
+    clearSave();
+    this.ui.showHud(false);
+    this.ui.clearWorldUi();
+    this.clearActors();
+    this.ui.fade(false);
+    this.hero.revive();
+    this.hero.position.set(0, 0, 3.1);
+    this.hero.facing = 0;
+    this.hero.animator.play('Cheer', { fade: 0.1 });
+    this.crypt.altar.awaken();
+    this.audio.play('victory');
+    this.ui.showVictory(this.stats());
+  }
+
+  private lose(): void {
+    this.phase = 'dead';
+    this.deadTimer = 0;
+    this.audio.play('defeat');
+    this.ui.prompt(null);
+  }
+
+  // ───────────────────────── Frame ─────────────────────────
+
   private frame = (now: number): void => {
-    const dt = Math.min(0.05, (now - this.last) / 1000);
+    let dt = Math.min(0.05, (now - this.last) / 1000);
     this.last = now;
+    this.frameCount++;
+    if (this.paused) dt = 0;
+    if (this.hitStop > 0) {
+      this.hitStop -= dt;
+      dt *= 0.1;
+    }
     this.time += dt;
     this.update(dt);
     this.renderer.render(dt);
@@ -157,31 +507,137 @@ export class Game {
 
   private update(dt: number): void {
     const t = this.time;
-    this.readInput();
-    this.hero.update(dt, this.heroInput, this.events);
-    const before = this.hero.position.clone();
-    this.crypt.colliders.resolve(this.hero.position, this.hero.radius);
-    if (before.distanceToSquared(this.hero.position) > 1e-6) this.hero.clampDash();
+    if (this.phase === 'play' && !this.paused) this.updatePlay(dt);
+    else if (this.phase === 'dead') this.updateDead(dt);
+
     this.hero.updateVisuals(dt);
-    for (const c of this.sleepers) c.updateVisuals(dt);
+    for (const e of this.enemies) e.updateVisuals(dt);
+    this.updateRings();
+    if (this.phase === 'select' || this.phase === 'victory') {
+      // Back to idle after a cheer.
+      if (this.hero.animator.current === 'Cheer' && this.hero.animator.progress >= 1 && this.phase === 'select') {
+        this.hero.animator.play('Idle', { fade: 0.25 });
+      }
+    }
 
     this.crypt.torches.update(t, dt);
     this.crypt.runes.update(t);
     this.crypt.altar.update(t, dt);
     this.crypt.door.update(t, dt);
+    this.updatePickups(t);
     this.spawnDust(dt);
     this.glow.update(dt);
     this.dust.update(dt);
 
-    this.rig.update(dt, t, this.hero.position);
+    this.updateCamera(dt, t);
     this.moon.position.copy(this.rig.focus).add(new THREE.Vector3(-9, 22, 7));
     this.moon.target.position.copy(this.rig.focus);
     this.heroLight.position.copy(this.hero.position).add(new THREE.Vector3(0, 3.2, 0.6));
+    this.heroLight.visible = this.hero.root.visible;
     this.updateSeeThrough();
 
     const h = this.renderer.bufferSize.y;
     this.glow.setScale(h, this.camera.fov);
     this.dust.setScale(h, this.camera.fov);
+    if (this.phase === 'play') this.updateWorldUi();
+  }
+
+  private updateCamera(dt: number, t: number): void {
+    if (this.phase === 'title') {
+      this.rig.setView(30 + t * 3, 34, 22);
+      this.rig.update(dt, t, this.camTarget.set(0, 0.5, 0));
+    } else if (this.phase === 'select' || this.phase === 'victory') {
+      // Hero stands to the right of the panel on wide screens.
+      const wide = window.innerWidth > 900;
+      this.rig.setView(0, 11, 8.4);
+      this.rig.update(dt, t, this.camTarget.set(this.hero.position.x - (wide ? 2.3 : 0), wide ? 1.15 : 1.6, this.hero.position.z));
+    } else {
+      this.rig.update(dt, t, this.hero.position);
+    }
+  }
+
+  private updatePlay(dt: number): void {
+    this.playTime += dt;
+    this.runTimers(dt);
+
+    if (this.input.keyPressed('Escape') || this.input.keyPressed('KeyP')) {
+      this.setPaused(true);
+      return;
+    }
+    if (this.input.keyPressed('KeyM')) this.audio.setMuted(!this.audio.muted);
+
+    const hero = this.hero;
+    this.readInput();
+    if (this.input.keyPressed('KeyH')) this.drinkPotion();
+    hero.update(dt, this.heroInput, this.events);
+    const before = hero.position.clone();
+    this.crypt.colliders.resolve(hero.position, hero.radius);
+    if (before.distanceToSquared(hero.position) > 1e-6) hero.clampDash();
+
+    if (this.renew.left > 0) {
+      this.renew.left -= dt;
+      this.healHero(this.renew.rate * dt, false);
+    }
+
+    this.updateEnemies(dt);
+    this.updateProjectiles(dt);
+    this.updateZones(dt);
+    this.collectPickups();
+
+    // The hall's steps.
+    const altarDist = hero.position.distanceTo(this.crypt.altar.position);
+    if (this.step === 'explore' && altarDist < ALTAR_REACH && this.input.keyPressed('KeyE') && hero.state === 'free') {
+      this.step = 'claiming';
+      hero.interact();
+      this.crypt.altar.setCharge(1);
+      this.later(0.55, () => {
+        this.crypt.altar.setCharge(0);
+        this.claimPillar();
+      });
+    }
+    if (this.step === 'fight') {
+      const living = this.enemies.filter((e) => e.alive);
+      const awake = living.filter((e) => e.state !== 'dormant');
+      if (this.waves.length > 0 && living.every((e) => e.state !== 'dormant')) {
+        this.waveCooldown -= dt;
+        if (this.waveCooldown <= 0 && awake.length <= 1) {
+          this.spawnWave(this.waves.shift()!);
+          this.waveCooldown = 3;
+        }
+      }
+      const pending = this.timers.length > 0 || this.waves.length > 0;
+      if (living.length === 0 && !pending) this.onCleared();
+      else this.ui.objective(`Defeat the skeletons: ${living.length + this.waves.flat().length} left`);
+    }
+    if (this.step === 'cleared') {
+      this.guideToDoor(dt);
+      const p = hero.position;
+      if (this.crypt.door.isOpen && p.z < -10.1 && Math.abs(p.x) < 2.6) this.exitHall();
+    }
+
+    if (!hero.alive) this.lose();
+
+    const ui = this.ui;
+    ui.updateHud(
+      hero.hp,
+      hero.maxHp,
+      hero.resource,
+      this.potions,
+      hero.def.abilities.map((_, i) => hero.cooldownFraction(i)),
+      hero.cooldowns,
+    );
+  }
+
+  private updateDead(dt: number): void {
+    this.deadTimer += dt;
+    this.runTimers(dt);
+    this.updateEnemies(dt);
+    this.updateProjectiles(dt);
+    if (this.deadTimer > 1.8 && this.ui.screenName !== 'gameover') {
+      this.ui.showHud(false);
+      this.ui.clearWorldUi();
+      this.ui.showGameOver(this.stats());
+    }
   }
 
   private readInput(): void {
@@ -196,22 +652,220 @@ export class Game {
 
     this.raycaster.setFromCamera(k.pointer, this.camera);
     if (!k.pointerActive || !this.raycaster.ray.intersectPlane(this.floor, this.heroInput.aim)) {
-      this.heroInput.aim.copy(this.hero.position).add(new THREE.Vector3(Math.sin(this.hero.facing), 0, Math.cos(this.hero.facing)));
+      // No mouse: aim where the hero faces, or at the nearest monster.
+      const target = this.nearestEnemy(this.hero.position, 9);
+      if (target) this.heroInput.aim.copy(target.position);
+      else this.heroInput.aim.copy(this.hero.position).add(new THREE.Vector3(Math.sin(this.hero.facing), 0, Math.cos(this.hero.facing)));
     }
-    this.heroInput.attack = k.buttonPressed(0) || k.keyPressed('KeyJ');
-    this.heroInput.secondary = k.buttonPressed(2) || k.keyPressed('KeyK');
+    this.heroInput.attack = k.buttonPressed(0) || k.keyPressed('KeyJ') || k.keyPressed('KeyF') || (k.button(0) && this.hero.state === 'free');
+    this.heroInput.secondary = k.buttonPressed(2) || k.keyPressed('KeyK') || k.keyPressed('KeyG');
     this.heroInput.dodge = k.keyPressed('Space') || k.keyPressed('ShiftLeft');
     this.heroInput.special = k.keyPressed('KeyQ');
+    const pressed = [this.heroInput.attack && k.buttonPressed(0), this.heroInput.secondary, this.heroInput.dodge, this.heroInput.special];
+    pressed.forEach((p, i) => {
+      if (p && this.hero.cooldowns[i] <= 0 && i > 0) this.ui.pulseSlot(i);
+    });
   }
 
-  // Placeholder effects until the combat pass: sparks in the class color.
+  // ───────────────────────── Enemies ─────────────────────────
+
+  private updateEnemies(dt: number): void {
+    const heroHidden = this.zones.some((z) => z.kind === 'smoke' && z.position.distanceTo(this.hero.position) < z.radius);
+    const ctx = {
+      target: this.hero.position,
+      targetVisible: this.hero.alive && !heroHidden,
+      others: this.enemies,
+      strike: (e: Enemy) => this.enemyStrike(e),
+      shoot: (e: Enemy, dir: THREE.Vector3) => this.enemyShoot(e, dir),
+    };
+    for (const e of this.enemies) {
+      e.update(dt, ctx);
+      if (!e.alive) continue;
+      const bx = e.position.x;
+      const bz = e.position.z;
+      this.crypt.colliders.resolve(e.position, e.radius);
+      // Pushed back by a wall or the altar: slide sideways around it, toward the hero.
+      const cx = e.position.x - bx;
+      const cz = e.position.z - bz;
+      const push = Math.hypot(cx, cz);
+      if (push > 1e-4 && e.state === 'chase') {
+        const along = (-cz / push) * (this.hero.position.x - e.position.x) + (cx / push) * (this.hero.position.z - e.position.z);
+        // Straight across the obstacle: keep going round the side it already chose.
+        if (Math.abs(along) > 0.6) e.slide = Math.sign(along);
+        const tx = (-cz / push) * e.slide;
+        const tz = (cx / push) * e.slide;
+        e.position.x += tx * e.def.speed * dt;
+        e.position.z += tz * e.def.speed * dt;
+        this.crypt.colliders.resolve(e.position, e.radius);
+      }
+      // Keep monsters from standing inside the hero.
+      const dx = e.position.x - this.hero.position.x;
+      const dz = e.position.z - this.hero.position.z;
+      const min = e.radius + this.hero.radius;
+      const d2 = dx * dx + dz * dz;
+      if (e.state !== 'dormant' && d2 < min * min && d2 > 1e-6) {
+        const d = Math.sqrt(d2);
+        e.position.x += (dx / d) * (min - d);
+        e.position.z += (dz / d) * (min - d);
+      }
+    }
+    // Remove the fallen once they have sunk away.
+    this.enemies = this.enemies.filter((e) => {
+      if (e.alive || e.deadTime < 3) return true;
+      this.scene.remove(e.root);
+      const ring = this.rings.get(e);
+      if (ring) this.scene.remove(ring);
+      this.rings.delete(e);
+      return false;
+    });
+  }
+
+  private updateRings(): void {
+    for (const [e, ring] of this.rings) {
+      const on = e.alive && e.telegraph > 0;
+      ring.visible = on;
+      if (!on) continue;
+      const reach = e.def.ranged ? 1.1 : e.def.reach * 0.9;
+      ring.position.set(e.position.x, 0.04, e.position.z);
+      ring.scale.setScalar(reach * (0.55 + e.telegraph * 0.45));
+      (ring.material as THREE.MeshBasicMaterial).opacity = 0.25 + e.telegraph * 0.65;
+    }
+  }
+
+  private enemyStrike(e: Enemy): void {
+    const hero = this.hero;
+    this.tmp.copy(hero.position).sub(e.position).setY(0);
+    const dist = this.tmp.length();
+    const facing = new THREE.Vector3(Math.sin(e.facing), 0, Math.cos(e.facing));
+    const inArc = dist < 1.1 || this.tmp.normalize().dot(facing) > 0.15;
+    this.audio.play('swing');
+    if (dist > e.def.reach + hero.radius || !inArc || !hero.alive) return;
+    this.damageHero(e.def.damage * this.difficulty.enemyDamage, e.position);
+    if (e.def.kind === 'brute') this.shake(0.3);
+  }
+
+  private enemyShoot(e: Enemy, dir: THREE.Vector3): void {
+    const color = new THREE.Color(e.def.eyes);
+    const mesh = this.orb(color, 2.6);
+    mesh.scale.setScalar(1.4);
+    mesh.position.copy(e.position).setY(1.3).addScaledVector(dir, 0.9);
+    this.scene.add(mesh);
+    this.audio.play('cast');
+    this.projectiles.push({
+      mesh,
+      velocity: dir.clone().multiplyScalar(e.def.ranged!.projectileSpeed),
+      damage: e.def.damage * this.difficulty.enemyDamage,
+      radius: 0.35,
+      life: 3,
+      hostile: true,
+      color,
+      heal: 0,
+      hit: new Set(),
+      pierce: false,
+    });
+  }
+
+  private damageHero(amount: number, from: THREE.Vector3): void {
+    const hero = this.hero;
+    if (hero.invulnerable > 0) {
+      this.floatAt(hero.position, 2.4, 'Dodged!', 'info');
+      return;
+    }
+    const taken = hero.takeHit(amount);
+    if (taken <= 0) {
+      this.floatAt(hero.position, 2.4, 'Blocked', 'block');
+      this.audio.play('block');
+      return;
+    }
+    this.floatAt(hero.position, 2.3, `-${Math.round(taken)}`, 'hurt');
+    this.audio.play('hurt');
+    this.shake(0.22);
+    this.burst(hero.position.clone().setY(1.1), this.red, 14, 2.5);
+    // A short grace period so a crowd can't chain hits.
+    hero.invulnerable = Math.max(hero.invulnerable, 0.45);
+    this.tmp.copy(hero.position).sub(from).setY(0).normalize();
+    hero.velocity.addScaledVector(this.tmp, 4);
+    // Doctor: Auto-Heal.
+    const passive = hero.def.passive;
+    if (hero.alive && hero.def.id === 'doctor' && Math.random() < passive.chance) {
+      this.later(0.35, () => this.healHero(12 + Math.random() * 10, true, 'Auto-Heal'));
+    }
+  }
+
+  private hitEnemy(e: Enemy, amount: number, from: THREE.Vector3, knockback: number, quiet = false): boolean {
+    const hero = this.hero;
+    let damage = amount;
+    let crit = false;
+    if (hero.def.id === 'warrior' && Math.random() < hero.def.passive.chance) {
+      damage *= 2.2;
+      crit = true;
+    }
+    damage = Math.round(damage * (0.9 + Math.random() * 0.2));
+    const dealt = e.hurt(damage, from, crit ? knockback * 1.8 : knockback);
+    if (dealt < 0) return false;
+    const head = e.def.scale * 2.2;
+    if (dealt === 0) {
+      this.floatAt(e.position, head, 'Blocked', 'block');
+      this.audio.play('block');
+      return true;
+    }
+    this.floatAt(e.position, head, crit ? `${dealt} Crushing Blow!` : String(dealt), crit ? 'crit' : 'damage');
+    this.burst(e.position.clone().setY(1.1 * e.def.scale), crit ? this.gold : this.white, crit ? 26 : 10, crit ? 4.5 : 3);
+    if (!quiet) this.audio.play(crit ? 'crit' : 'hit');
+    this.hitStop = Math.max(this.hitStop, crit ? 0.09 : 0.045);
+    if (crit) this.shake(0.25);
+    hero.resource = Math.min(100, hero.resource + 3);
+    if (!e.alive) this.onEnemyDied(e);
+    // Thief: Surprise Attack.
+    else if (hero.def.id === 'thief' && Math.random() < hero.def.passive.chance) {
+      this.later(0.12, () => {
+        if (!e.alive) return;
+        const extra = e.hurt(Math.round(amount * 0.6), from, 0.5);
+        if (extra > 0) {
+          this.floatAt(e.position, head + 0.4, `${extra} Surprise!`, 'crit');
+          this.audio.play('hit');
+          if (!e.alive) this.onEnemyDied(e);
+        }
+      });
+    }
+    return true;
+  }
+
+  private onEnemyDied(e: Enemy): void {
+    this.kills++;
+    this.audio.play('bones');
+    this.puff(e.position, 18);
+    this.burst(e.position.clone().setY(1), this.gold, 18, 3);
+    if (Math.random() < this.difficulty.potionDrop) {
+      this.later(0.5, () => this.dropPotion(e.position.clone().setY(0)));
+    }
+  }
+
+  private nearestEnemy(from: THREE.Vector3, within: number): Enemy | null {
+    let best: Enemy | null = null;
+    let bestD = within;
+    for (const e of this.enemies) {
+      if (!e.active) continue;
+      const d = e.position.distanceTo(from);
+      if (d < bestD) {
+        bestD = d;
+        best = e;
+      }
+    }
+    return best;
+  }
+
+  // ───────────────────────── Hero actions ─────────────────────────
+
   private onMelee(step: ComboStep, index: number): void {
-    const f = this.hero.facing;
-    const reach = step.range * 0.75;
-    const p = this.hero.position;
-    for (let i = 0; i < 26; i++) {
+    const hero = this.hero;
+    const f = hero.facing;
+    const p = hero.position;
+    const dir = new THREE.Vector3(Math.sin(f), 0, Math.cos(f));
+    this.audio.play('swing');
+    for (let i = 0; i < 22; i++) {
       const a = f + (Math.random() - 0.5) * step.arc;
-      const r = reach * (0.6 + Math.random() * 0.5);
+      const r = step.range * 0.75 * (0.6 + Math.random() * 0.5);
       this.glow.spawn({
         x: p.x + Math.sin(a) * r,
         y: 0.9 + Math.random() * 0.8,
@@ -219,7 +873,7 @@ export class Game {
         vx: Math.sin(a) * 3,
         vy: Math.random() * 1.5,
         vz: Math.cos(a) * 3,
-        life: 0.25 + Math.random() * 0.25,
+        life: 0.22 + Math.random() * 0.2,
         size: 0.12,
         sizeEnd: 0.02,
         color: Math.random() < 0.3 ? this.heroHot : this.heroColor,
@@ -227,38 +881,121 @@ export class Game {
         drag: 4,
       });
     }
-    if (index === 2) this.rig.addTrauma(0.22);
+    const finisher = index === 2;
+    for (const e of this.enemies) {
+      if (!e.active) continue;
+      this.tmp.copy(e.position).sub(p).setY(0);
+      const dist = this.tmp.length() - e.radius;
+      if (dist > step.range) continue;
+      // Generous: anything touching the hero counts, the cone covers the rest.
+      if (dist > 0.6 && this.tmp.normalize().dot(dir) < Math.cos(step.arc / 2)) continue;
+      this.hitEnemy(e, step.damage, p, finisher ? 4.5 : 2.2);
+    }
+    if (finisher) this.shake(0.18);
   }
 
   private onCast(ability: Ability, aim: THREE.Vector3): void {
-    const p = this.hero.position.clone().setY(1.2);
+    const hero = this.hero;
+    const p = hero.position.clone().setY(1.2);
     const kind = ability.kind;
-    if (kind.type === 'nova' || kind.type === 'whirl' || kind.type === 'sanctuary') {
-      const radius = kind.radius;
-      for (let i = 0; i < 90; i++) {
-        const a = (i / 90) * Math.PI * 2;
-        this.glow.spawn({
-          x: p.x + Math.sin(a) * 0.6,
-          y: 0.6,
-          z: p.z + Math.cos(a) * 0.6,
-          vx: Math.sin(a) * radius * 2.4,
-          vz: Math.cos(a) * radius * 2.4,
-          life: 0.45,
-          size: 0.22,
-          sizeEnd: 0.05,
-          color: i % 3 === 0 ? this.heroHot : this.heroColor,
-          intensity: 5,
-          drag: 5,
-        });
+    const dir = aim.clone().sub(hero.position).setY(0);
+    if (dir.lengthSq() < 0.01) dir.set(Math.sin(hero.facing), 0, Math.cos(hero.facing));
+    dir.normalize();
+    const slot = hero.def.abilities.indexOf(ability);
+    if (slot > 0) this.ui.pulseSlot(slot);
+
+    switch (kind.type) {
+      case 'whirl':
+      case 'nova': {
+        this.ring(p, kind.radius, kind.type === 'nova' ? 90 : 60);
+        this.shake(0.3);
+        this.audio.play(kind.type === 'nova' ? 'cast' : 'swing');
+        for (const e of this.enemies) {
+          if (!e.active || e.position.distanceTo(hero.position) > kind.radius + e.radius) continue;
+          this.hitEnemy(e, kind.damage, hero.position, kind.type === 'nova' ? 6 : 3.5);
+        }
+        break;
       }
-      this.rig.addTrauma(0.3);
-    } else {
-      const dir = aim.clone().sub(this.hero.position).setY(0).normalize();
-      this.burst(p.addScaledVector(dir, 0.9), this.heroColor, 24, 2.5);
+      case 'bolt': {
+        const color = this.heroColor.clone();
+        const mesh = this.orb(color, 3);
+        mesh.position.copy(p).addScaledVector(dir, 0.8);
+        this.scene.add(mesh);
+        this.audio.play('cast');
+        this.projectiles.push({
+          mesh,
+          velocity: dir.clone().multiplyScalar(kind.projectileSpeed),
+          damage: kind.damage,
+          radius: 0.45,
+          life: 1.4,
+          hostile: false,
+          color,
+          heal: kind.heal ?? 0,
+          hit: new Set(),
+          pierce: false,
+        });
+        break;
+      }
+      case 'fan': {
+        this.audio.play('swing');
+        for (let i = 0; i < kind.knives; i++) {
+          const a = Math.atan2(dir.x, dir.z) + (i / (kind.knives - 1) - 0.5) * kind.spread;
+          const v = new THREE.Vector3(Math.sin(a), 0, Math.cos(a));
+          const mesh = new THREE.Mesh(this.knifeGeometry, new THREE.MeshBasicMaterial({ color: this.heroHot.clone().multiplyScalar(2.5), toneMapped: false }));
+          mesh.position.copy(p).addScaledVector(v, 0.6);
+          mesh.rotation.y = a;
+          this.scene.add(mesh);
+          this.projectiles.push({
+            mesh,
+            velocity: v.multiplyScalar(22),
+            damage: kind.damage,
+            radius: 0.4,
+            life: 0.55,
+            hostile: false,
+            color: this.heroColor,
+            heal: 0,
+            hit: new Set(),
+            pierce: true,
+          });
+        }
+        break;
+      }
+      case 'sanctuary':
+        this.addZone('sanctuary', hero.position.clone(), kind.radius, kind.duration, kind.healPerSecond, kind.damagePerSecond);
+        this.audio.play('cast');
+        break;
+      case 'smoke':
+        this.addZone('smoke', hero.position.clone(), kind.radius, kind.duration, 0, 0);
+        for (let i = 0; i < 60; i++) this.puff(hero.position, 1);
+        this.audio.play('cast');
+        break;
+      case 'guard':
+        hero.buff = kind.duration;
+        this.burst(p, this.heroColor, 30, 2);
+        this.floatAt(hero.position, 2.5, 'Shield up!', 'info');
+        this.audio.play('block');
+        break;
+      case 'barrier':
+        hero.buff = kind.duration;
+        hero.barrier = kind.absorb;
+        this.burst(p, this.heroColor, 40, 2.5);
+        this.floatAt(hero.position, 2.5, 'Protected!', 'info');
+        this.audio.play('cast');
+        break;
+      case 'renew':
+        this.renew.left = kind.duration;
+        this.renew.rate = kind.heal / kind.duration;
+        this.burst(p, this.heal, 40, 2);
+        this.floatAt(hero.position, 2.5, 'Healing Prayer', 'heal');
+        this.audio.play('potion');
+        break;
+      default:
+        break;
     }
   }
 
   private onDash(kind: 'roll' | 'shadowstep' | 'blink', from: THREE.Vector3, to: THREE.Vector3): void {
+    this.ui.pulseSlot(2);
     const steps = kind === 'roll' ? 8 : 18;
     for (let i = 0; i <= steps; i++) {
       const p = from.clone().lerp(to, i / steps);
@@ -281,6 +1018,289 @@ export class Game {
     }
   }
 
+  private drinkPotion(): void {
+    const hero = this.hero;
+    if (!hero.alive) return;
+    if (this.potions <= 0) {
+      this.floatAt(hero.position, 2.4, 'No potions', 'info');
+      return;
+    }
+    if (hero.hp >= hero.maxHp) {
+      this.floatAt(hero.position, 2.4, 'Already healthy', 'info');
+      return;
+    }
+    this.potions--;
+    this.potionsUsed++;
+    this.ui.pulseSlot('potion');
+    this.audio.play('potion');
+    this.healHero(hero.maxHp * 0.45, true);
+    for (let i = 0; i < 30; i++) {
+      this.glow.spawn({
+        x: hero.position.x + (Math.random() - 0.5) * 1.2,
+        y: 0.2 + Math.random() * 0.5,
+        z: hero.position.z + (Math.random() - 0.5) * 1.2,
+        vy: 1.5 + Math.random() * 1.5,
+        life: 0.8,
+        size: 0.12,
+        sizeEnd: 0.02,
+        color: this.heal,
+        intensity: 3,
+        drag: 1,
+      });
+    }
+  }
+
+  private healHero(amount: number, show: boolean, label?: string): void {
+    const hero = this.hero;
+    if (!hero.alive) return;
+    const before = hero.hp;
+    hero.heal(amount);
+    const gained = hero.hp - before;
+    if (show && gained > 0.5) this.floatAt(hero.position, 2.4, `${label ? label + ' ' : ''}+${Math.round(gained)}`, 'heal');
+  }
+
+  // ───────────────────────── Projectiles, zones, pickups ─────────────────────────
+
+  private orb(color: THREE.Color, strength: number): THREE.Mesh {
+    return new THREE.Mesh(this.orbGeometry, new THREE.MeshBasicMaterial({ color: color.clone().multiplyScalar(strength), toneMapped: false }));
+  }
+
+  private updateProjectiles(dt: number): void {
+    const keep: Projectile[] = [];
+    for (const p of this.projectiles) {
+      p.life -= dt;
+      p.mesh.position.addScaledVector(p.velocity, dt);
+      p.mesh.rotation.y += dt * 6;
+      const pos = p.mesh.position;
+      this.glow.spawn({ x: pos.x, y: pos.y, z: pos.z, life: 0.25, size: 0.16, sizeEnd: 0.01, color: p.color, intensity: 3, drag: 2 });
+      let dead = p.life <= 0 || this.crypt.colliders.hits(pos.x, pos.z, 0.1);
+      if (!dead && p.hostile) {
+        const hero = this.hero;
+        if (hero.alive && Math.hypot(pos.x - hero.position.x, pos.z - hero.position.z) < p.radius + hero.radius) {
+          this.damageHero(p.damage, pos);
+          dead = true;
+        }
+      } else if (!dead) {
+        for (const e of this.enemies) {
+          if (!e.active || p.hit.has(e)) continue;
+          if (Math.hypot(pos.x - e.position.x, pos.z - e.position.z) > p.radius + e.radius) continue;
+          p.hit.add(e);
+          if (this.hitEnemy(e, p.damage, pos.clone().sub(p.velocity), 2.5) && p.heal > 0) this.healHero(p.heal, false);
+          if (!p.pierce) {
+            dead = true;
+            break;
+          }
+        }
+      }
+      if (dead) {
+        this.burst(pos.clone(), p.color, 12, 2.5);
+        this.scene.remove(p.mesh);
+      } else keep.push(p);
+    }
+    this.projectiles = keep;
+  }
+
+  private addZone(kind: Zone['kind'], position: THREE.Vector3, radius: number, life: number, healPerSecond: number, damagePerSecond: number): void {
+    const color = kind === 'smoke' ? new THREE.Color('#6b6380') : this.heroColor.clone();
+    const mesh = new THREE.Mesh(
+      this.discGeometry,
+      new THREE.MeshBasicMaterial({ color, transparent: true, opacity: kind === 'smoke' ? 0.35 : 0.22, depthWrite: false, blending: kind === 'smoke' ? THREE.NormalBlending : THREE.AdditiveBlending }),
+    );
+    mesh.rotation.x = -Math.PI / 2;
+    mesh.position.copy(position).setY(0.05);
+    mesh.scale.setScalar(radius);
+    this.scene.add(mesh);
+    this.zones.push({ kind, position, radius, life, tick: 0, healPerSecond, damagePerSecond, mesh });
+  }
+
+  private updateZones(dt: number): void {
+    this.zones = this.zones.filter((z) => {
+      z.life -= dt;
+      z.tick -= dt;
+      const mat = z.mesh.material as THREE.MeshBasicMaterial;
+      if (z.life < 0.5) mat.opacity *= 0.9;
+      if (z.kind === 'sanctuary') {
+        // Rising motes around the edge.
+        const a = Math.random() * Math.PI * 2;
+        this.glow.spawn({ x: z.position.x + Math.sin(a) * z.radius, y: 0.1, z: z.position.z + Math.cos(a) * z.radius, vy: 2, life: 0.8, size: 0.14, sizeEnd: 0.02, color: this.heroColor, intensity: 3 });
+        if (z.tick <= 0) {
+          z.tick = 0.33;
+          if (this.hero.position.distanceTo(z.position) < z.radius) this.healHero(z.healPerSecond * 0.33, false);
+          for (const e of this.enemies) {
+            if (e.active && e.position.distanceTo(z.position) < z.radius + e.radius) this.hitEnemy(e, z.damagePerSecond * 0.33, z.position, 0.3, true);
+          }
+        }
+      } else if (Math.random() < 0.6) {
+        this.puff(z.position.clone().add(new THREE.Vector3((Math.random() - 0.5) * z.radius * 1.6, 0, (Math.random() - 0.5) * z.radius * 1.6)), 1);
+      }
+      if (z.life > 0) return true;
+      this.scene.remove(z.mesh);
+      return false;
+    });
+  }
+
+  private dropPotion(at: THREE.Vector3): void {
+    // Nudge toward the middle until the spot is clear of props.
+    const p = at.clone();
+    for (let i = 0; i < 20 && this.crypt.colliders.hits(p.x, p.z, 0.6); i++) p.multiplyScalar(0.9);
+    const object = new THREE.Group();
+    const bottle = this.assets.piece('bottle_A_green');
+    bottle.traverse((o) => {
+      if (o instanceof THREE.Mesh) {
+        const m = (o.material as THREE.MeshStandardMaterial).clone();
+        m.color.set('#ff4f78');
+        m.emissive.set('#ff2a5a');
+        m.emissiveIntensity = 0.35;
+        o.material = m;
+        o.castShadow = true;
+      }
+    });
+    bottle.scale.setScalar(0.55);
+    object.add(bottle);
+    object.position.copy(p);
+    this.scene.add(object);
+    this.pickups.push({ object, base: p.clone() });
+  }
+
+  private updatePickups(t: number): void {
+    for (const pk of this.pickups) {
+      pk.object.position.y = 0.35 + Math.sin(t * 2.4 + pk.base.x) * 0.15;
+      pk.object.rotation.y = t * 1.4;
+      if (Math.random() < 0.15) {
+        this.glow.spawn({ x: pk.base.x + (Math.random() - 0.5) * 0.6, y: 0.4, z: pk.base.z + (Math.random() - 0.5) * 0.6, vy: 0.9, life: 0.9, size: 0.09, sizeEnd: 0.01, color: this.red, intensity: 2.5 });
+      }
+    }
+  }
+
+  private collectPickups(): void {
+    this.pickups = this.pickups.filter((pk) => {
+      if (pk.base.distanceTo(this.hero.position.clone().setY(0)) > 1.3) return true;
+      if (this.potions >= MAX_POTIONS) return true;
+      this.potions++;
+      this.audio.play('pickup');
+      this.floatAt(pk.base, 1.6, 'Potion +1', 'heal');
+      this.scene.remove(pk.object);
+      return false;
+    });
+  }
+
+  /** Golden motes drifting from the altar to the open door. */
+  private guideToDoor(dt: number): void {
+    if (Math.random() > dt * 30) return;
+    const z = -3.5 - Math.random() * 7.5;
+    this.glow.spawn({ x: (Math.random() - 0.5) * 0.8, y: 0.2, z, vz: -1.6, vy: 0.4, life: 1.2, size: 0.12, sizeEnd: 0.02, color: this.gold, intensity: 3 });
+  }
+
+  // ───────────────────────── Screen-space UI ─────────────────────────
+
+  private toScreen(p: THREE.Vector3, lift: number): { x: number; y: number; on: boolean } {
+    const v = this.projected.copy(p).setY(p.y + lift).project(this.camera);
+    const canvas = this.renderer.gl.domElement;
+    return { x: ((v.x + 1) / 2) * canvas.clientWidth, y: ((1 - v.y) / 2) * canvas.clientHeight, on: v.z < 1 };
+  }
+
+  private floatAt(p: THREE.Vector3, lift: number, text: string, kind: FloatKind): void {
+    const s = this.toScreen(p, lift);
+    if (s.on) this.ui.float(text, s.x, s.y, kind);
+  }
+
+  private updateWorldUi(): void {
+    const frame = this.frameCount;
+    for (const e of this.enemies) {
+      const s = this.toScreen(e.position, e.def.scale * 2.15);
+      this.ui.enemyBar(e, s.x, s.y, e.hp / e.maxHp, e.alive && e.active && e.hp < e.maxHp && s.on, frame);
+    }
+    this.ui.sweepBars(frame);
+
+    const hero = this.hero;
+    if (this.paused) return;
+    if (this.step === 'explore' && hero.alive && hero.position.distanceTo(this.crypt.altar.position) < ALTAR_REACH + 2) {
+      const s = this.toScreen(hero.position, -0.9);
+      const near = hero.position.distanceTo(this.crypt.altar.position) < ALTAR_REACH;
+      this.ui.prompt(near ? '<kbd>E</kbd> Take the pillar' : 'Come closer', s.x, s.y);
+    } else if (this.step === 'cleared' && this.crypt.door.isOpen) {
+      const s = this.toScreen(new THREE.Vector3(0, 0, -10.6), 0.2);
+      this.ui.prompt(this.level === LEVELS.length - 1 ? 'Escape!' : 'Next hall', s.x, s.y);
+    } else {
+      this.ui.prompt(null);
+    }
+  }
+
+  // ───────────────────────── Helpers ─────────────────────────
+
+  private later(seconds: number, run: () => void): void {
+    this.timers.push({ at: seconds, run });
+  }
+
+  private runTimers(dt: number): void {
+    if (this.timers.length === 0) return;
+    const due: Timer[] = [];
+    this.timers = this.timers.filter((t) => {
+      t.at -= dt;
+      if (t.at > 0) return true;
+      due.push(t);
+      return false;
+    });
+    for (const t of due) t.run();
+  }
+
+  private shake(amount: number): void {
+    this.rig.addTrauma(REDUCED_MOTION ? amount * 0.25 : amount);
+  }
+
+  setHero(id: HeroClassId): void {
+    const previous = this.hero;
+    const hero = new Hero(this.assets, HERO_CLASSES[id]);
+    hero.position.copy(previous ? previous.position : this.crypt.heroStart);
+    hero.facing = previous ? previous.facing : Math.PI;
+    hero.root.visible = previous ? previous.root.visible : true;
+    if (previous) this.scene.remove(previous.root);
+    this.scene.add(hero.root);
+    this.hero = hero;
+    this.heroColor.set(hero.def.color);
+    this.heroHot.set(hero.def.hot);
+    if (previous?.root.visible) this.burst(hero.position.clone().setY(1), this.heroColor, 40, 4);
+  }
+
+  setMood(mood: Mood): void {
+    this.mood = mood;
+    this.scene.background = new THREE.Color(mood.background);
+    this.fog.color.set(mood.fog.color);
+    this.fog.density = mood.fog.density;
+    this.hemi.color.set(mood.hemi.sky);
+    this.hemi.groundColor.set(mood.hemi.ground);
+    this.hemi.intensity = mood.hemi.intensity;
+    this.moon.color.set(mood.moon.color);
+    this.moon.intensity = mood.moon.intensity;
+    this.scene.environmentIntensity = mood.environment;
+    this.heroLight.intensity = mood.heroLight;
+    for (const material of this.assets.kitMaterials) {
+      if (material instanceof THREE.MeshStandardMaterial) material.color.set(mood.stone);
+    }
+    this.crypt.torches.applyMood(mood);
+    this.crypt.runes.setColor(mood.rune.color, mood.rune.intensity);
+    this.renderer.applyMood(mood);
+  }
+
+  private ring(at: THREE.Vector3, radius: number, count: number): void {
+    for (let i = 0; i < count; i++) {
+      const a = (i / count) * Math.PI * 2;
+      this.glow.spawn({
+        x: at.x + Math.sin(a) * 0.6,
+        y: 0.6,
+        z: at.z + Math.cos(a) * 0.6,
+        vx: Math.sin(a) * radius * 2.4,
+        vz: Math.cos(a) * radius * 2.4,
+        life: 0.45,
+        size: 0.22,
+        sizeEnd: 0.05,
+        color: i % 3 === 0 ? this.heroHot : this.heroColor,
+        intensity: 5,
+        drag: 5,
+      });
+    }
+  }
+
   private burst(at: THREE.Vector3, color: THREE.Color, count: number, speed: number): void {
     for (let i = 0; i < count; i++) {
       const v = new THREE.Vector3().randomDirection().multiplyScalar(speed * (0.4 + Math.random()));
@@ -297,6 +1317,26 @@ export class Game {
         color,
         intensity: 4,
         drag: 3,
+      });
+    }
+  }
+
+  /** Dust kicked up from the floor. */
+  private puff(at: THREE.Vector3, count: number): void {
+    for (let i = 0; i < count; i++) {
+      this.dust.spawn({
+        x: at.x + (Math.random() - 0.5) * 1.2,
+        y: 0.2 + Math.random() * 0.4,
+        z: at.z + (Math.random() - 0.5) * 1.2,
+        vx: (Math.random() - 0.5) * 1.2,
+        vy: 0.4 + Math.random() * 0.6,
+        vz: (Math.random() - 0.5) * 1.2,
+        life: 0.9 + Math.random() * 0.6,
+        size: 0.4,
+        sizeEnd: 0.9,
+        color: this.dustColor,
+        intensity: 0.55,
+        drag: 2,
       });
     }
   }
@@ -325,7 +1365,7 @@ export class Game {
     const p = this.projected.copy(this.hero.position).setY(1.2).project(this.camera);
     const size = this.renderer.bufferSize;
     seeThrough.center.value.set(((p.x + 1) / 2) * size.x, ((p.y + 1) / 2) * size.y);
-    seeThrough.radius.value = size.y * 0.13;
+    seeThrough.radius.value = this.hero.root.visible ? size.y * 0.13 : 0;
     seeThrough.depth.value = -this.projected.copy(this.hero.position).setY(1.2).applyMatrix4(this.camera.matrixWorldInverse).z;
   }
 }

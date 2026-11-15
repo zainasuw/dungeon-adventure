@@ -2,7 +2,7 @@ import type { HeroModel } from '../core/assets';
 import type { IconName } from '../ui/icons';
 import type { Hand } from './character';
 
-export type HeroClassId = 'warrior' | 'rogue' | 'mage' | 'healer';
+export type HeroClassId = 'warrior' | 'thief' | 'priestess' | 'doctor';
 export type SlotKey = 'LMB' | 'RMB' | 'SPACE' | 'Q';
 
 /** One swing of a melee combo. Times are fractions of the clip. */
@@ -49,6 +49,10 @@ export interface HeroClass {
   id: HeroClassId;
   name: string;
   epithet: string;
+  /** One friendly sentence for the hero select screen. */
+  blurb: string;
+  /** The class's passive from the original game, shown on hero select. */
+  passive: { name: string; text: string; chance: number };
   model: HeroModel;
   hide: string[];
   hold: { item: string; hand: Hand; flip?: boolean; tilt?: number }[];
@@ -71,12 +75,14 @@ export const HERO_CLASSES: Record<HeroClassId, HeroClass> = {
     id: 'warrior',
     name: 'Warrior',
     epithet: 'Shield of the Living',
+    blurb: 'Tough and steady. Swings a big sword and blocks with a shield.',
+    passive: { name: 'Crushing Blow', text: 'Sometimes hits extra hard.', chance: 0.25 },
     model: 'Knight',
     hide: ['1H_Sword_Offhand', 'Badge_Shield', 'Rectangle_Shield', 'Spike_Shield', '2H_Sword'],
     hold: [],
     color: '#ff3a32',
     hot: '#ffd2a8',
-    maxHp: 140,
+    maxHp: 150,
     speed: 6.4,
     resource: 'Rage',
     stats: { power: 4, agility: 2, resilience: 5 },
@@ -101,10 +107,12 @@ export const HERO_CLASSES: Record<HeroClassId, HeroClass> = {
       { name: 'Shield Wall', icon: 'checkedShield', key: 'Q', cooldown: 10, cost: 20, kind: { type: 'guard', duration: 3, reduction: 0.8 } },
     ],
   },
-  rogue: {
-    id: 'rogue',
-    name: 'Rogue',
+  thief: {
+    id: 'thief',
+    name: 'Thief',
     epithet: 'Knife in the Dark',
+    blurb: 'Super fast. Darts in and out with two daggers.',
+    passive: { name: 'Surprise Attack', text: 'Sometimes strikes twice.', chance: 0.3 },
     model: 'Rogue_Hooded',
     hide: ['1H_Crossbow', '2H_Crossbow', 'Throwable'],
     hold: [],
@@ -135,37 +143,41 @@ export const HERO_CLASSES: Record<HeroClassId, HeroClass> = {
       { name: 'Smoke Bomb', icon: 'smokeBomb', key: 'Q', cooldown: 12, cost: 25, kind: { type: 'smoke', duration: 3.5, radius: 4 } },
     ],
   },
-  mage: {
-    id: 'mage',
-    name: 'Mage',
-    epithet: 'Keeper of the Storm',
+  doctor: {
+    id: 'doctor',
+    name: 'Doctor',
+    epithet: 'Mender of the Lost',
+    blurb: 'Throws glowing remedies from far away and patches up fast.',
+    passive: { name: 'Auto-Heal', text: 'Sometimes heals when hit.', chance: 0.4 },
     model: 'Mage',
     hide: ['Spellbook', 'Spellbook_open', '1H_Wand', '2H_Staff'],
     hold: [{ item: 'staff', hand: 'right', flip: true, tilt: -0.6 }],
     color: '#3aa6ff',
     hot: '#d8f4ff',
-    maxHp: 85,
+    maxHp: 120,
     speed: 6.1,
-    resource: 'Mana',
+    resource: 'Focus',
     stats: { power: 5, agility: 3, resilience: 1 },
     abilities: [
       {
-        name: 'Arcane Bolt',
+        name: 'Remedy Bolt',
         icon: 'boltSpellCast',
         key: 'LMB',
         cooldown: 0,
         cost: 0,
         kind: { type: 'bolt', clip: 'Spellcast_Shoot', speed: 1.9, castAt: 0.3, damage: 20, projectileSpeed: 24 },
       },
-      { name: 'Nova', icon: 'starSwirl', key: 'RMB', cooldown: 6, cost: 30, kind: { type: 'nova', damage: 45, radius: 5.8 } },
-      { name: 'Blink', icon: 'teleport', key: 'SPACE', cooldown: 2.5, cost: 0, kind: { type: 'blink', distance: 6.5 } },
-      { name: 'Arcane Shield', icon: 'magicShield', key: 'Q', cooldown: 12, cost: 25, kind: { type: 'barrier', duration: 5, absorb: 45 } },
+      { name: 'Pulse Burst', icon: 'starSwirl', key: 'RMB', cooldown: 6, cost: 30, kind: { type: 'nova', damage: 45, radius: 5.8 } },
+      { name: 'Quick Step', icon: 'teleport', key: 'SPACE', cooldown: 2.5, cost: 0, kind: { type: 'blink', distance: 6.5 } },
+      { name: 'Bandage Ward', icon: 'magicShield', key: 'Q', cooldown: 12, cost: 25, kind: { type: 'barrier', duration: 5, absorb: 45 } },
     ],
   },
-  healer: {
-    id: 'healer',
-    name: 'Healer',
+  priestess: {
+    id: 'priestess',
+    name: 'Priestess',
     epithet: 'Light Against the Dead',
+    blurb: 'Holy light that hurts the dead and heals herself.',
+    passive: { name: 'Healing Prayer', text: 'Her light orbs heal her a little.', chance: 1 },
     model: 'Rogue',
     hide: ['Knife', 'Knife_Offhand', '1H_Crossbow', '2H_Crossbow', 'Throwable'],
     hold: [
@@ -174,7 +186,7 @@ export const HERO_CLASSES: Record<HeroClassId, HeroClass> = {
     ],
     color: '#ffb23c',
     hot: '#fff3c8',
-    maxHp: 105,
+    maxHp: 100,
     speed: 6.3,
     resource: 'Faith',
     stats: { power: 2, agility: 3, resilience: 4 },

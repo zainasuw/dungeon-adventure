@@ -93,7 +93,23 @@ export class GoldenDoor {
 
   setProgress(pillarsAwake: number): void {
     this.progress = pillarsAwake / 4;
-    if (pillarsAwake >= 4) this.opening = true;
+  }
+
+  /** Swings the door open (the room is cleared). */
+  open(): void {
+    this.opening = true;
+  }
+
+  get isOpen(): boolean {
+    return this.openAmount > 0.6;
+  }
+
+  /** Shuts the door instantly for a fresh room. */
+  reset(pillarsAwake: number): void {
+    this.opening = false;
+    this.openAmount = 0;
+    this.door.rotation.y = 0;
+    this.setProgress(pillarsAwake);
   }
 
   update(time: number, dt: number): void {
