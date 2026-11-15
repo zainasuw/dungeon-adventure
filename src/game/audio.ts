@@ -37,6 +37,16 @@ export class Audio {
     };
     window.addEventListener('pointerdown', unlock);
     window.addEventListener('keydown', unlock);
+    // Silence everything while the player is in another tab or window.
+    const away = (): void => {
+      void this.ctx?.suspend();
+    };
+    const back = (): void => {
+      if (document.visibilityState === 'visible' && document.hasFocus()) void this.ctx?.resume();
+    };
+    document.addEventListener('visibilitychange', () => (document.hidden ? away() : back()));
+    window.addEventListener('blur', away);
+    window.addEventListener('focus', back);
   }
 
   setMuted(muted: boolean): void {

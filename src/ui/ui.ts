@@ -8,7 +8,8 @@ export const HERO_ORDER: HeroClassId[] = ['warrior', 'priestess', 'thief', 'doct
 export interface UiHandlers {
   newQuest(): void;
   continueQuest(): void;
-  previewHero(id: HeroClassId): void;
+  /** `loud` adds a cheer and a sound (clicks and keys); hovering is quiet. */
+  previewHero(id: HeroClassId, loud: boolean): void;
   /** Spins the chosen hero on the select screen by a number of radians. */
   spinHero(radians: number): void;
   /** Menu sounds: a soft tick on hover, a click on press. */
@@ -178,7 +179,7 @@ export class Ui {
       `<button type="button" class="link-btn pick-back" data-act="back">‹ Back</button>
       <header class="pick-head">
         <h2 class="pick-title">Choose your hero</h2>
-        <p class="pick-help">Click a hero or use <kbd>←</kbd> <kbd>→</kbd>. Drag to spin them.</p>
+        <p class="pick-help">Point at a hero or press <kbd>←</kbd> <kbd>→</kbd>, then <kbd>Enter</kbd>. Drag to spin them.</p>
       </header>
       <div class="hero-row" role="radiogroup" aria-label="Heroes">${tags}</div>
       <button type="button" class="nav-arrow nav-arrow--prev" data-act="prev" aria-label="Previous hero">${icon('M336 64L144 256l192 192', 'icon icon--stroke')}</button>
@@ -192,9 +193,14 @@ export class Ui {
         </div>
       </section>`,
     );
-    this.screen.querySelectorAll<HTMLButtonElement>('[data-hero]').forEach((b) =>
-      b.addEventListener('click', () => this.pickHero(b.dataset.hero as HeroClassId)),
-    );
+    this.screen.querySelectorAll<HTMLButtonElement>('[data-hero]').forEach((b) => {
+      const id = b.dataset.hero as HeroClassId;
+      b.addEventListener('click', () => this.pickHero(id));
+      // Hovering a hero picks it straight away (no click needed).
+      b.addEventListener('pointerenter', (e) => {
+        if (e.pointerType === 'mouse' && this.selectState.hero !== id) this.pickHero(id, true, false);
+      });
+    });
     this.screen.querySelectorAll<HTMLButtonElement>('[data-diff]').forEach((b) =>
       b.addEventListener('click', () => this.pickDifficulty(b.dataset.diff as DifficultyId)),
     );
@@ -552,7 +558,7 @@ export class Ui {
     ).join('')}</div>`;
   }
 
-  private pickHero(id: HeroClassId, preview = true): void {
+  private pickHero(id: HeroClassId, preview = true, loud = true): void {
     this.selectState.hero = id;
     const c = HERO_CLASSES[id];
     this.screen.querySelectorAll<HTMLButtonElement>('[data-hero]').forEach((b) => {
@@ -578,7 +584,7 @@ export class Ui {
       <p class="pick-card__power"><b>Special:</b> ${c.passive.name}. ${c.passive.text}</p>`;
     const go = this.screen.querySelector('[data-act="start"]');
     if (go) go.innerHTML = `Start as ${c.name} <kbd>Enter</kbd>`;
-    if (preview) this.handlers.previewHero(id);
+    if (preview) this.handlers.previewHero(id, loud);
   }
 
   private stepHero(delta: number): void {
@@ -654,9 +660,11 @@ export class Ui {
       }
       return;
     }
-    if (name === 'select' && (e.key === 'ArrowRight' || e.key === 'ArrowLeft')) {
+    const right = e.key === 'ArrowRight' || e.code === 'KeyD';
+    const left = e.key === 'ArrowLeft' || e.code === 'KeyA';
+    if (name === 'select' && (right || left)) {
       e.preventDefault();
-      this.stepHero(e.key === 'ArrowRight' ? 1 : -1);
+      this.stepHero(right ? 1 : -1);
       this.screen.querySelector<HTMLElement>('[data-act="start"]')?.focus({ preventScroll: true });
     } else if (name === 'title' && e.key === 'Enter' && !(e.target instanceof HTMLButtonElement)) {
       e.preventDefault();

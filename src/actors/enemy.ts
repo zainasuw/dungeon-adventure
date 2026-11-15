@@ -117,6 +117,8 @@ export interface EnemyContext {
   others: readonly Enemy[];
   strike(enemy: Enemy): void;
   shoot(enemy: Enemy, direction: THREE.Vector3): void;
+  /** Which way to walk to reach the hero around obstacles, or null to go straight. */
+  path(position: THREE.Vector3, out: THREE.Vector3): THREE.Vector3 | null;
 }
 
 /** A skeleton that wakes, chases, telegraphs its swing, and falls apart. */
@@ -138,6 +140,7 @@ export class Enemy extends Character {
   private readonly toTarget = new THREE.Vector3();
   private readonly steer = new THREE.Vector3();
   private readonly knock = new THREE.Vector3();
+  private readonly route = new THREE.Vector3();
 
   constructor(assets: Assets, def: EnemyDef, hpScale: number) {
     super(assets, def.model, assets.skeletonClips);
@@ -248,11 +251,16 @@ export class Enemy extends Character {
       this.steer.set(Math.sin(this.wanderAngle), 0, Math.cos(this.wanderAngle)).multiplyScalar(0.35);
     } else if (def.ranged) {
       const dir = this.toTarget.clone().divideScalar(Math.max(dist, 0.001));
-      if (dist > def.ranged.keepAway + 1.5) this.steer.copy(dir);
+      if (dist > def.ranged.keepAway + 1.5) this.steer.copy(ctx.path(this.position, this.route) ?? dir);
       else if (dist < def.ranged.keepAway - 1.5) this.steer.copy(dir).negate();
       if (dist < def.reach && this.cooldown <= 0) return this.startAttack(dir);
     } else {
-      if (dist > def.reach * 0.8) this.steer.copy(this.toTarget).divideScalar(Math.max(dist, 0.001));
+      if (dist > def.reach * 0.8) {
+        // Far away: follow the walking map around pillars; close up: go straight in.
+        const around = dist > 1.8 ? ctx.path(this.position, this.route) : null;
+        if (around) this.steer.copy(around);
+        else this.steer.copy(this.toTarget).divideScalar(Math.max(dist, 0.001));
+      }
       if (dist < def.reach && this.cooldown <= 0) return this.startAttack(this.toTarget.clone().divideScalar(Math.max(dist, 0.001)));
     }
 

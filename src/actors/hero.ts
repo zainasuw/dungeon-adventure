@@ -177,10 +177,10 @@ export class Hero extends Character {
   private move(dt: number, move: THREE.Vector3): void {
     const target = move.lengthSq() > 0.001 ? move : null;
     const speed = this.def.speed;
-    const lambda = target ? 14 : 18;
+    const lambda = target ? 26 : 22;
     this.velocity.x = damp(this.velocity.x, target ? target.x * speed : 0, lambda, dt);
     this.velocity.z = damp(this.velocity.z, target ? target.z * speed : 0, lambda, dt);
-    if (target) this.facing = dampAngle(this.facing, Math.atan2(target.x, target.z), 16, dt);
+    if (target) this.facing = dampAngle(this.facing, Math.atan2(target.x, target.z), 32, dt);
     const moving = this.velocity.lengthSq() > 0.6;
     this.animator.play(moving ? 'Running_A' : 'Idle', { fade: 0.12, speed: moving ? clamp(this.velocity.length() / speed, 0.6, 1.1) * 1.05 : 1 });
   }
@@ -248,6 +248,14 @@ export class Hero extends Character {
       events.melee(step, this.combo % kind.combo.length);
     }
     if (this.dodgeCancel(input, events)) return;
+    // Walking cancels the end of a swing, so the hero never feels stuck.
+    if (this.hitDone && p >= step.cancelAt * 0.85 && input.move.lengthSq() > 0.04 && this.buffered?.slot !== 0) {
+      this.combo = (this.combo + 1) % kind.combo.length;
+      this.comboResetTimer = 0.55;
+      this.toFree();
+      this.move(dt, input.move);
+      return;
+    }
     if (p >= step.cancelAt && this.buffered) {
       const slot = this.buffered.slot;
       if (slot === 0) {
@@ -272,6 +280,11 @@ export class Hero extends Character {
       events.cast(ability, input.aim);
     }
     if (this.dodgeCancel(input, events)) return;
+    if (this.castDone && p >= 0.5 && input.move.lengthSq() > 0.04 && !this.buffered) {
+      this.toFree();
+      this.move(dt, input.move);
+      return;
+    }
     if (p >= 0.62 && this.buffered && this.buffered.slot !== 0) {
       if (this.tryStartBuffered(input, events)) return;
     }

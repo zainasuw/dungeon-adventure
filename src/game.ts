@@ -14,6 +14,7 @@ import { Renderer } from './render/renderer';
 import { applySeeThrough, seeThrough } from './render/see-through';
 import { HERO_ORDER, Ui, type FloatKind, type QuestStats } from './ui/ui';
 import { buildCrypt, ROOM, type Crypt } from './world/crypt';
+import { NavGrid } from './world/nav';
 import { Particles } from './world/particles';
 
 type Phase = 'title' | 'select' | 'play' | 'dead' | 'victory';
@@ -108,6 +109,8 @@ export class Game {
   private readonly tipsShown = new Set<string>();
   private autoPotionCooldown = 0;
   private arrow!: THREE.Mesh;
+  private nav!: NavGrid;
+  private navTimer = 0;
 
   // Hero select: all four heroes in a row; the chosen one steps forward and spins.
   private lineup: Hero[] = [];
@@ -191,6 +194,7 @@ export class Game {
     for (const material of assets.kitMaterials) applySeeThrough(material);
     this.crypt = buildCrypt(assets, this.glow);
     this.scene.add(this.crypt.group, this.glow.points, this.dust.points);
+    this.nav = new NavGrid(this.crypt.colliders);
     this.arrow = this.makeArrow();
     this.scene.add(this.arrow);
     this.lineupRing = new THREE.Mesh(
@@ -203,7 +207,7 @@ export class Game {
     this.ui = new Ui(uiRoot, {
       newQuest: () => this.openSelect(),
       continueQuest: () => this.continueQuest(),
-      previewHero: (id) => this.previewHero(id),
+      previewHero: (id, loud) => this.previewHero(id, loud),
       spinHero: (radians) => {
         this.spin += radians;
         this.lastDrag = this.time;
@@ -852,8 +856,13 @@ export class Game {
       this.heroInput.aim.copy(this.hero.position).add(dir);
     }
     // F (or J, or a click) attacks; holding keeps swinging.
+    // Holding keeps swinging only while a monster is in reach and you aren't walking away,
+    // so a held key never pins the hero in place.
     const holding = k.button(0) || k.key('KeyF') || k.key('KeyJ');
-    this.heroInput.attack = k.buttonPressed(0) || k.keyPressed('KeyF') || k.keyPressed('KeyJ') || (holding && this.hero.state === 'free');
+    const inReach = this.nearestEnemy(this.hero.position, 3.4) !== null;
+    const walking = move.lengthSq() > 0.04;
+    this.heroInput.attack =
+      k.buttonPressed(0) || k.keyPressed('KeyF') || k.keyPressed('KeyJ') || (holding && inReach && !walking && this.hero.state === 'free');
     this.heroInput.secondary = k.buttonPressed(2) || k.keyPressed('KeyK') || k.keyPressed('KeyG');
     this.heroInput.dodge = k.keyPressed('Space') || k.keyPressed('ShiftLeft');
     this.heroInput.special = k.keyPressed('KeyQ');
@@ -873,7 +882,14 @@ export class Game {
       others: this.enemies,
       strike: (e: Enemy) => this.enemyStrike(e),
       shoot: (e: Enemy, dir: THREE.Vector3) => this.enemyShoot(e, dir),
+      path: (pos: THREE.Vector3, out: THREE.Vector3) => this.nav.direction(pos, out),
     };
+    // Refresh the walking map toward the hero a few times a second.
+    this.navTimer -= dt;
+    if (this.navTimer <= 0) {
+      this.navTimer = 0.25;
+      this.nav.update(this.hero.position);
+    }
     for (const e of this.enemies) {
       e.update(dt, ctx);
       if (!e.alive) continue;
