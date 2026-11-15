@@ -187,12 +187,14 @@ export interface Difficulty {
   potionDrop: number;
   /** Easy skips the last wave of reinforcements. */
   dropLastWave: boolean;
+  /** Multiplier on monsters' wind-up time before a blow (longer = more time to react). */
+  windup: number;
 }
 
 export const DIFFICULTIES: Record<DifficultyId, Difficulty> = {
-  easy: { id: 'easy', label: 'Easy', hint: 'Gentle monsters, lots of potions. Great for kids.', enemyHp: 0.7, enemyDamage: 0.45, potionDrop: 0.45, dropLastWave: true },
-  normal: { id: 'normal', label: 'Normal', hint: 'A fair fight.', enemyHp: 1, enemyDamage: 1, potionDrop: 0.25, dropLastWave: false },
-  hard: { id: 'hard', label: 'Hard', hint: 'For brave souls only.', enemyHp: 1.3, enemyDamage: 1.5, potionDrop: 0.15, dropLastWave: false },
+  easy: { id: 'easy', label: 'Easy', hint: 'Gentle monsters, lots of potions. Great for kids.', enemyHp: 0.7, enemyDamage: 0.45, potionDrop: 0.45, dropLastWave: true, windup: 1.5 },
+  normal: { id: 'normal', label: 'Normal', hint: 'A fair fight.', enemyHp: 1, enemyDamage: 1, potionDrop: 0.25, dropLastWave: false, windup: 1 },
+  hard: { id: 'hard', label: 'Hard', hint: 'For brave souls only.', enemyHp: 1.3, enemyDamage: 1.5, potionDrop: 0.15, dropLastWave: false, windup: 1 },
 };
 
 export const MAX_POTIONS = 5;

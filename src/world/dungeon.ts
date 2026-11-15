@@ -38,10 +38,29 @@ const HALL_EAST: Rect = { x0: 10, x1: 22, z0: -6, z1: -2 };
 const TREASURE: Rect = { x0: 22, x1: 30, z0: -10, z1: 2 };
 const HALL_2: Rect = { x0: -2, x1: 2, z0: -22, z1: -10 };
 const ALTAR_ROOM: Rect = { x0: -10, x1: 10, z0: -42, z1: -22 };
+// Burial niches off the altar room: a short opening in the side wall, and a pocket
+// behind the wall that nothing in the room can see into. Skeletons step out of them.
+// The opening is one wall piece wide; the pocket sits beyond it and runs north
+// behind the wall, so from anywhere in the room the hide spot is behind stone.
+const NICHE_W: Rect = { x0: -14, x1: -10, z0: -34, z1: -30 };
+const POCKET_W: Rect = { x0: -18, x1: -14, z0: -38, z1: -30 };
+const NICHE_E: Rect = { x0: 10, x1: 14, z0: -34, z1: -30 };
+const POCKET_E: Rect = { x0: 14, x1: 18, z0: -38, z1: -30 };
 
 const ROOMS = [ENTRANCE, GUARD, TREASURE, ALTAR_ROOM];
-const HALLS = [HALL_1, HALL_EAST, HALL_2];
+const HALLS = [HALL_1, HALL_EAST, HALL_2, NICHE_W, POCKET_W, NICHE_E, POCKET_E];
 const AREAS = [...ROOMS, ...HALLS];
+
+/**
+ * Where the altar room's monsters come from: out of sight (`hide`), stepping into
+ * view at `mouth`. Two burial niches in the side walls, and the corridor the hero
+ * came through (from the guard room, round the corner).
+ */
+export const DUNGEON_ENTRANCES: { hide: [number, number]; mouth: [number, number] }[] = [
+  { hide: [-16, -36.5], mouth: [-10.5, -32] },
+  { hide: [16, -36.5], mouth: [10.5, -32] },
+  { hide: [-6, -5], mouth: [0, -21] },
+];
 
 export const DUNGEON_ENCOUNTERS: Encounter[] = [
   {
@@ -243,6 +262,7 @@ export function buildDungeon(assets: Assets, embers: Particles, themeIndex: numb
     halfZ: (all.z1 - all.z0) / 2,
     outdoor: false,
     doorAt,
+    entrances: DUNGEON_ENTRANCES.map((e) => ({ hide: new THREE.Vector3(e.hide[0], 0, e.hide[1]), mouth: new THREE.Vector3(e.mouth[0], 0, e.mouth[1]) })),
     center,
     connected: true,
     encounters: DUNGEON_ENCOUNTERS,

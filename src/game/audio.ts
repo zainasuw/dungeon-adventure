@@ -3,6 +3,8 @@
  * first click or key press, as browsers require.
  */
 export type Sfx =
+  | 'windup'
+  | 'rattle'
   | 'swing'
   | 'hit'
   | 'crit'
@@ -197,6 +199,15 @@ export class Audio {
     if (now - (this.last.get(name) ?? -1) < 0.035) return;
     this.last.set(name, now);
     switch (name) {
+      case 'windup':
+        // The breath before a blow: a short rising rasp, before the swing itself.
+        this.tone(now, [180, 420], 0.22, 'sawtooth', 0.05);
+        return this.whoosh(now, 0.2, 600, 1400, 0.07);
+      case 'rattle':
+        // Bones stirring out of sight: a scrape and a few clicks.
+        this.tone(now, [90, 70], 0.4, 'sawtooth', 0.05);
+        for (let i = 0; i < 6; i++) this.click(now + 0.05 + i * 0.06 + Math.random() * 0.03, 1100 + Math.random() * 1400);
+        return;
       case 'swing':
         return this.whoosh(now, 0.16, 900, 2600, 0.18);
       case 'hit':

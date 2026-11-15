@@ -160,6 +160,8 @@ export interface EnemyContext {
   path(position: THREE.Vector3, out: THREE.Vector3): THREE.Vector3 | null;
   /** A charging monster ran into a wall. */
   bump(enemy: Enemy): void;
+  /** A monster has just started winding up a blow (play its warning). */
+  warn(enemy: Enemy): void;
 }
 
 /** A skeleton that wakes, chases, telegraphs its swing, and falls apart. */
@@ -191,14 +193,22 @@ export class Enemy extends Character {
   /** The Shield Rammer's rush: its direction, and how far is left to run. */
   readonly chargeDir = new THREE.Vector3();
   chargeLeft = 0;
+  /** First person: when this monster was first refused an attack for being out of view (see the game's mayAttack). */
+  offscreenSince = -1;
+  /** Frontal hits stopped by the shield in a row; the guard breaks after a few. */
+  blocksInRow = 0;
   /** True while the red warning lane should show. */
   get chargeWarning(): boolean {
     return this.state === 'windup' && !!this.def.charge;
   }
   private readonly lastPos = new THREE.Vector3();
 
-  constructor(assets: Assets, def: EnemyDef, hpScale: number) {
+  /** Stretches the wind-up of every blow (Easy gives young players longer to see it coming). */
+  windupScale = 1;
+
+  constructor(assets: Assets, def: EnemyDef, hpScale: number, windupScale = 1) {
     super(assets, def.model, assets.skeletonClips);
+    this.windupScale = windupScale;
     this.def = def;
     this.maxHp = this.hp = Math.round(def.hp * hpScale);
     this.radius = 0.55 * def.scale;
@@ -255,6 +265,17 @@ export class Enemy extends Character {
     this.animator.play('Idle_Combat', { fade: 0, restart: true });
   }
 
+  /**
+   * Steps into the room already awake (from a niche or a corridor), instead of
+   * popping out of a summoning circle.
+   */
+  emerge(): void {
+    this.model.scale.copy(this.state === 'rising' ? this.fullScale : this.model.scale);
+    this.root.visible = true;
+    this.toChase();
+    this.cooldown = Math.max(this.cooldown, 0.8);
+  }
+
   /** True while the summoning ring is still showing and the monster isn't out yet. */
   get summoning(): boolean {
     return this.state === 'dormant' || (this.state === 'rising' && this.stateTime < Enemy.SUMMON_TIME);
@@ -263,10 +284,22 @@ export class Enemy extends Character {
   /** Applies a hit. Returns the damage dealt, 0 if blocked, -1 if it can't be hurt right now. */
   hurt(amount: number, from: THREE.Vector3, knockback: number): number {
     if (!this.alive || this.summoning) return -1;
-    if (this.def.block > 0 && this.state !== 'windup' && Math.random() < this.def.block) {
+    if (this.def.block > 0 && this.guardUp(from)) {
       this.flash('#9fd8ff', 0.12);
+      this.blocksInRow++;
+      if (this.blocksInRow >= 3) {
+        // Three blows on the shield knock it aside: a clear opening.
+        this.blocksInRow = 0;
+        this.state = 'hurt';
+        this.stateTime = 0;
+        this.telegraph = 0;
+        this.stun = 1.1;
+        this.animator.play('Hit_B', { loop: false, fade: 0.05, speed: 1.1, restart: true });
+        return -2;
+      }
       return 0;
     }
+    this.blocksInRow = 0;
     this.hp = Math.max(0, this.hp - amount);
     this.flash('#ffffff', 0.12);
     this.knock.copy(this.position).sub(from).setY(0);
@@ -290,7 +323,23 @@ export class Enemy extends Character {
     return amount;
   }
 
+  /**
+   * A shield skeleton's guard: it stops blows from the front while it walks or
+   * waits. It is open from the sides and behind, while it swings and recovers,
+   * and while it is staggered. Readable, and the opening is learnable.
+   */
+  guardUp(from: THREE.Vector3): boolean {
+    if (this.def.block <= 0 || this.state !== 'chase') return false;
+    const dx = from.x - this.position.x;
+    const dz = from.z - this.position.z;
+    const d = Math.hypot(dx, dz);
+    if (d < 0.01) return false;
+    const facing = Math.sin(this.facing) * (dx / d) + Math.cos(this.facing) * (dz / d);
+    return facing > 0.45;
+  }
+
   update(dt: number, ctx: EnemyContext): void {
+    this.warnCtx = ctx;
     this.stateTime += dt;
     this.cooldown -= dt;
     // Knockback slides out over a few frames.
@@ -423,7 +472,9 @@ export class Enemy extends Character {
     this.position.addScaledVector(this.velocity, dt);
     const moving = this.velocity.lengthSq() > 0.4;
     const faceDir = ctx.targetVisible && dist < 9 ? this.toTarget : this.velocity;
-    if (faceDir.lengthSq() > 0.01) this.facing = dampAngle(this.facing, Math.atan2(faceDir.x, faceDir.z), 9, dt);
+    // A shield bearer turns slowly while it guards up close, so stepping round it is a real opening.
+    const turnRate = this.def.block > 0 && dist < 3.5 ? 2.2 : 9;
+    if (faceDir.lengthSq() > 0.01) this.facing = dampAngle(this.facing, Math.atan2(faceDir.x, faceDir.z), turnRate, dt);
     if (moving) {
       const fast = this.def.kind === 'runt';
       this.animator.play(fast ? 'Running_C' : 'Walking_D_Skeletons', { speed: fast ? 1 : 1.25 * (speed / 3), fade: 0.15 });
@@ -438,8 +489,12 @@ export class Enemy extends Character {
     this.struck = false;
     this.facing = Math.atan2(dir.x, dir.z);
     this.velocity.set(0, 0, 0);
-    this.animator.play(this.def.clip, { loop: false, speed: this.def.clipSpeed * this.animSpeed, fade: 0.08, restart: true });
+    // The warning part of the swing runs slower on Easy; once the blow lands the clip finishes at normal speed.
+    this.animator.play(this.def.clip, { loop: false, speed: (this.def.clipSpeed * this.animSpeed) / this.windupScale, fade: 0.08, restart: true });
+    this.warnCtx?.warn(this);
   }
+
+  private warnCtx: EnemyContext | null = null;
 
   private updateAttack(dt: number, ctx: EnemyContext): void {
     const p = this.animator.progress;
@@ -457,8 +512,8 @@ export class Enemy extends Character {
           this.facing = dampAngle(this.facing, Math.atan2(this.toTarget.x, this.toTarget.z), 6, dt);
         }
         this.chargeDir.set(Math.sin(this.facing), 0, Math.cos(this.facing));
-        this.telegraph = Math.min(1, this.stateTime / c.windup);
-        if (this.stateTime >= c.windup) {
+        this.telegraph = Math.min(1, this.stateTime / (c.windup * this.windupScale));
+        if (this.stateTime >= c.windup * this.windupScale) {
           this.telegraph = 0;
           this.state = 'charge';
           this.stateTime = 0;
@@ -474,6 +529,7 @@ export class Enemy extends Character {
         this.struck = true;
         this.telegraph = 0;
         this.state = 'recover';
+        if (this.windupScale !== 1) this.animator.play(this.def.clip, { loop: false, speed: this.def.clipSpeed * this.animSpeed, fade: 0, restart: false }).timeScale = this.def.clipSpeed * this.animSpeed;
         if (this.def.ranged) {
           ctx.shoot(this, new THREE.Vector3(Math.sin(this.facing), 0, Math.cos(this.facing)));
         } else {

@@ -2602,7 +2602,7 @@ body.touch-mode button kbd {
 /* Two settings side by side: what it is on top, its value below. */
 .pause__row {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: 1fr 1fr 1fr;
   gap: 10px;
 }
 

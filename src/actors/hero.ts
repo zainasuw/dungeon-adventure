@@ -6,6 +6,8 @@ import type { Ability, AbilityKind, ComboStep, HeroClass } from './classes';
 
 /** What the hero asks the game to do this frame (hits, projectiles, effects). */
 export interface HeroEvents {
+  /** A melee swing has begun; the blow lands at `hitAt` of the clip (seconds given). */
+  swing(step: ComboStep, comboIndex: number, secondsToHit: number): void;
   melee(step: ComboStep, comboIndex: number): void;
   cast(ability: Ability, aim: THREE.Vector3): void;
   dash(kind: 'roll' | 'shadowstep' | 'blink', from: THREE.Vector3, to: THREE.Vector3): void;
@@ -227,6 +229,7 @@ export class Hero extends Character {
         this.lungeDir.copy(this.aimDir);
         this.lungeSpeed = step.lunge * 7;
         this.animator.play(step.clip, { loop: false, speed: step.speed, fade: 0.06, restart: true });
+        events.swing(step, this.combo % kind.combo.length, (this.animator.duration(step.clip) / step.speed) * step.hitAt);
         break;
       }
       case 'roll':

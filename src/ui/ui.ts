@@ -23,7 +23,9 @@ export interface UiHandlers {
   toggleMute(): boolean;
   pause(): void;
   /** What the pause menu shows: where you are, pillars, coins, and the current view's name. */
-  pauseInfo(): { where: string; pillars: number; coins: number; camera: string };
+  pauseInfo(): { where: string; pillars: number; coins: number; camera: string; tilt: boolean };
+  /** Toggle the first-person auto tilt; returns the new state. */
+  toggleTilt(): boolean;
   /** Switch to the next camera view (first person, behind, from above). */
   cycleCamera(): void;
   /** An action button on screen was pressed or let go (touch, or a mouse click on it). */
@@ -330,6 +332,7 @@ export class Ui {
           <div class="pause__row">
             <button class="btn btn--setting" data-act="camera"><span>View</span><b>${info.camera}</b></button>
             <button class="btn btn--setting" data-act="mute" aria-pressed="${!this.muted}"><span>Sound</span><b>${this.muted ? 'Off' : 'On'}</b></button>
+            <button class="btn btn--setting" data-act="tilt" aria-pressed="${info.tilt}" title="In first person, look down a little by itself when a monster is close"><span>Auto tilt</span><b>${info.tilt ? 'On' : 'Off'}</b></button>
           </div>
           <button class="btn" data-act="howto">How to play</button>
           <button class="btn" data-act="restart">Restart this hall</button>
@@ -350,6 +353,11 @@ export class Ui {
       this.muted = this.handlers.toggleMute();
       this.showPause();
       this.focusFirst('[data-act="mute"]');
+    });
+    this.on('tilt', () => {
+      this.handlers.toggleTilt();
+      this.showPause();
+      this.focusFirst('[data-act="tilt"]');
     });
     // Two taps for anything that throws away progress, so a slip next to Resume is harmless.
     this.confirmTap('restart', 'Tap again to restart', () => this.handlers.restartLevel());

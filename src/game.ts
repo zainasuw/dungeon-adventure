@@ -102,6 +102,8 @@ const ALTAR_REACH = 3.2;
 const KEEP_PROGRESS = true;
 /** Show the two-door "choose your path" screen between halls. Off: the route is random. */
 const ASK_PATH = false;
+/** Monsters of a hall with entrances (the Old Crypt) walk in from niches and corridors instead of popping out of circles. */
+const NATURAL_ENTRANCES = true;
 /** Where the four heroes stand on the select screen. */
 const LINEUP_X = [-3.375, -1.125, 1.125, 3.375];
 const LINEUP_Z = 2.8;
@@ -250,7 +252,13 @@ export class Game {
    * models tucked in the corners (1.5 = the old large ones); tilt = look down a little
    * while a monster is in reach; markers = hit-direction flash and off-screen threat chevron.
    */
-  readonly fp = { eye: 0.64, fov: 70, weaponScale: 1, tilt: true, markers: true };
+  readonly fp = { eye: 0.64, fov: 70, weaponScale: 1, tilt: (() => {
+    try {
+      return localStorage.getItem('dungeon-adventure:tilt') === 'on';
+    } catch {
+      return false;
+    }
+  })(), markers: true };
 
   /** Applies changed first-person options (eye height and hand models need rebuilding). */
   setFpOptions(o: Partial<typeof this.fp>): void {
@@ -265,6 +273,8 @@ export class Game {
   /** First person: your weapon (and shield or book) in view, swinging when you attack. */
   private viewmodel: { group: THREE.Group; right: THREE.Group | null; left: THREE.Group | null } | null = null;
   private swingT = 1;
+  /** Length of the current hand-model swing in seconds (twice the time to the blow). */
+  private swingLen = 0.28;
   private swingKind: 'swing' | 'thrust' = 'swing';
   private swingSide = 1;
   private fpBodyHidden = false;
@@ -378,10 +388,14 @@ export class Game {
     special: false,
   };
   private readonly events: HeroEvents = {
-    melee: (step, index) => {
+    swing: (_step, index, secondsToHit) => {
+      // The hand model starts moving with the attack and crosses the middle when the blow lands.
       this.swingT = 0;
+      this.swingLen = Math.max(0.18, secondsToHit * 2);
       this.swingKind = 'swing';
       this.swingSide = index % 2 ? -1 : 1;
+    },
+    melee: (step, index) => {
       this.onMelee(step, index);
     },
     cast: (ability, aim) => {
@@ -454,6 +468,15 @@ export class Game {
         this.audio.setMuted(!this.audio.muted);
         return this.audio.muted;
       },
+      toggleTilt: () => {
+        this.fp.tilt = !this.fp.tilt;
+        try {
+          localStorage.setItem('dungeon-adventure:tilt', this.fp.tilt ? 'on' : 'off');
+        } catch {
+          // Storage can be off; the choice still works for this visit.
+        }
+        return this.fp.tilt;
+      },
       pause: () => this.setPaused(true),
       slot: (code, down) => (down ? this.input.press(code) : this.input.release(code)),
       isTouch: () => this.input.touchMode && !this.input.padMode,
@@ -463,6 +486,7 @@ export class Game {
         pillars: this.pillars,
         coins: this.coins,
         camera: { first: 'First person', behind: 'Behind hero', top: 'From above' }[this.camStyle],
+        tilt: this.fp.tilt,
       }),
       cycleCamera: () => this.cycleCamera(false),
     });
@@ -990,7 +1014,7 @@ export class Game {
   }
 
   private spawnEnemy(kind: EnemyKind, at: THREE.Vector3): Enemy {
-    const enemy = new Enemy(this.assets, ENEMIES[kind], this.difficulty.enemyHp);
+    const enemy = new Enemy(this.assets, ENEMIES[kind], this.difficulty.enemyHp, this.difficulty.windup);
     enemy.position.copy(at);
     this.scene.add(enemy.root);
     const ring = new THREE.Mesh(
@@ -1637,8 +1661,14 @@ export class Game {
     this.audio.play('pillar');
     this.ui.objective('The skeletons are waking up! Defeat them all');
     this.later(1.2, () => this.tip('attack', 'Press <kbd>F</kbd> to attack. Hold it to keep swinging. Your hero aims for you!', 6));
-    this.enemies.forEach((e, i) => {
+    let n = 0;
+    this.enemies.forEach((e) => {
       if (e.state !== 'dormant' || this.waitingInAmbush(e)) return;
+      const i = n++;
+      if (this.useEntrances()) {
+        this.later(0.2 + i * 0.7, () => this.enterFrom(e, i));
+        return;
+      }
       this.later(0.35 + i * 0.35, () => {
         if (!e.alive) return;
         this.summon(e);
@@ -1660,6 +1690,15 @@ export class Game {
       .filter((p) => p.distanceTo(this.hero.position) > 4.5)
       .sort(() => Math.random() - 0.5);
     kinds.forEach((kind, i) => {
+      if (this.useEntrances()) {
+        this.later(i * 0.7, () => {
+          const enemy = this.spawnEnemy(kind, this.crypt.entrances![0].hide);
+          if (eliteFirst && i === 0) enemy.makeElite(this.difficulty.id === 'easy' ? 1.5 : 2.2);
+          enemy.sleep();
+          this.enterFrom(enemy, i + this.waveEntryOffset++);
+        });
+        return;
+      }
       const at = points[i % points.length].clone().add(new THREE.Vector3((Math.random() - 0.5) * 1.5, 0, (Math.random() - 0.5) * 1.5));
       this.later(i * 0.4, () => {
         const enemy = this.spawnEnemy(kind, at);
@@ -1670,6 +1709,37 @@ export class Game {
         enemy.facing = Math.atan2(this.hero.position.x - at.x, this.hero.position.z - at.z);
         this.summon(enemy);
       });
+    });
+  }
+
+  private waveEntryOffset = 1;
+
+  /** Does this hall have real entrances for its monsters (niches, corridors) instead of summoning circles? */
+  private useEntrances(): boolean {
+    return NATURAL_ENTRANCES && !!this.crypt.entrances?.length;
+  }
+
+  /**
+   * A monster comes in from an entrance: bones rattle and dust puffs at the
+   * opening first, then it steps out already awake and walks in along the room.
+   * Entrances alternate, so nobody crowds one doorway.
+   */
+  private enterFrom(e: Enemy, i: number): void {
+    if (!e.alive) return;
+    const entries = this.crypt.entrances!;
+    const entry = entries[i % entries.length];
+    e.position.copy(entry.hide);
+    e.position.x += (Math.random() - 0.5) * 1.2;
+    e.position.z += (Math.random() - 0.5) * 1.2;
+    this.crypt.colliders.resolve(e.position, e.radius);
+    e.facing = Math.atan2(entry.mouth.x - e.position.x, entry.mouth.z - e.position.z);
+    this.audio.play('rattle');
+    this.puff(entry.mouth, 10);
+    this.tip('entrance', 'Listen: bones are stirring. Skeletons come in from the <b>side niches</b> and the <b>way you came</b>!', 5);
+    this.later(0.5, () => {
+      if (!e.alive) return;
+      e.emerge();
+      if (e.elite) this.floatAt(e.position, 3, 'Elite!', 'crit');
     });
   }
 
@@ -2017,7 +2087,7 @@ export class Game {
     const t = this.time;
     const walking = this.hero.velocity.lengthSq() > 1;
     const bob = walking ? Math.sin(t * 9) * 0.018 : Math.sin(t * 1.6) * 0.008;
-    this.swingT = Math.min(1, this.swingT + dt / 0.28);
+    this.swingT = Math.min(1, this.swingT + dt / this.swingLen);
     const s = this.swingT;
     const arc = Math.sin(s * Math.PI);
     // Ease out: a fast cut, then a soft settle back.
@@ -2469,6 +2539,9 @@ export class Game {
       shoot: (e: Enemy, dir: THREE.Vector3) => this.enemyShoot(e, dir),
       path: (pos: THREE.Vector3, out: THREE.Vector3) => this.nav.direction(pos, out),
       mayAttack: (e: Enemy) => this.mayAttack(e),
+      warn: (e: Enemy) => {
+        if (e.def.kind !== 'king') this.audio.play('windup');
+      },
       bump: (e: Enemy) => {
         this.shake(0.25);
         this.puff(e.position, 14);
@@ -2660,11 +2733,20 @@ export class Game {
     damage *= 1 + 0.25 * this.lvl('mighty');
     damage = Math.round(damage * (0.9 + Math.random() * 0.2));
     const dealt = e.hurt(damage, from, crit ? knockback * 1.8 : knockback);
-    if (dealt < 0) return false;
     const head = e.def.scale * 2.2;
+    if (dealt === -2) {
+      // The third blow on the shield knocks it aside.
+      this.floatAt(e.position, head, 'Shield knocked aside!', 'crit');
+      this.audio.play('crit');
+      this.burst(e.position.clone().setY(1.2), new THREE.Color('#9fd8ff'), 24, 4);
+      this.shake(0.15);
+      return true;
+    }
+    if (dealt < 0) return false;
     if (dealt === 0) {
       this.floatAt(e.position, head, 'Blocked', 'block');
       this.audio.play('block');
+      this.tip('shield', 'Its <b>shield</b> stops hits from the front. Hit it from the <b>side</b>, right after it swings, or keep hitting to knock the shield aside!', 6);
       return true;
     }
     this.floatAt(e.position, head, crit ? `${dealt} Crushing Blow!` : String(dealt), crit ? 'crit' : 'damage');
@@ -2720,6 +2802,7 @@ export class Game {
     let bestScore = Infinity;
     const want = pointer ? this.tmp.copy(pointer).sub(hero).setY(0) : null;
     if (want && want.lengthSq() > 0.01) want.normalize();
+    const fp = this.firstPerson;
     for (const e of this.enemies) {
       if (!e.active) continue;
       const dx = e.position.x - hero.x;
@@ -2727,6 +2810,8 @@ export class Game {
       const d = Math.hypot(dx, dz);
       if (d > 11) continue;
       let score = d;
+      // Through your own eyes you hit what's in front of you, not something behind your back.
+      if (fp && want && d > 0.9 && (dx * want.x + dz * want.z) / Math.max(d, 0.001) < 0.1) continue;
       if (want && d > 3.2) {
         const cos = (dx * want.x + dz * want.z) / Math.max(d, 0.001);
         if (cos < Math.cos(THREE.MathUtils.degToRad(40))) continue;
@@ -2748,7 +2833,37 @@ export class Game {
     const limit = this.difficulty.id === 'easy' ? 1 : this.difficulty.id === 'normal' ? 2 : 3;
     let busy = 0;
     for (const o of this.enemies) if (o !== e && o.alive && (o.state === 'windup' || o.state === 'recover' || o.state === 'charge')) busy++;
-    return busy < limit;
+    if (busy >= limit) return false;
+    // First person: a monster the player can't see waits a moment before it swings,
+    // so the warning chevron and its rattle have time to register (God of War's rule:
+    // visibility decides who may attack).
+    if (this.firstPerson && !this.inFrame(e)) {
+      if (e.offscreenSince < 0) e.offscreenSince = this.time;
+      if (this.time - e.offscreenSince < 0.6) return false;
+    } else e.offscreenSince = -1;
+    return true;
+  }
+
+  /** Is this monster's head inside the player's view right now? */
+  private inFrame(e: Enemy): boolean {
+    const s = this.toScreen(e.position, e.def.scale * 1.6);
+    const canvas = this.renderer.gl.domElement;
+    return s.on && s.x > 0 && s.x < canvas.clientWidth && s.y > 0 && s.y < canvas.clientHeight;
+  }
+
+  /** Does a wall stand between two points on the floor? (Props and the altar don't count.) */
+  private wallBetween(a: THREE.Vector3, b: THREE.Vector3): boolean {
+    const c = this.crypt.colliders;
+    if (this.wallsOf !== c || this.wallCount !== c.boxes.length) this.occludeFn(a, b);
+    const dx = b.x - a.x;
+    const dz = b.z - a.z;
+    const len = Math.hypot(dx, dz);
+    for (let d = 0.3; d < len; d += 0.3) {
+      const x = a.x + (dx / len) * d;
+      const z = a.z + (dz / len) * d;
+      if (this.walls.some((w) => x > w.minX && x < w.maxX && z > w.minZ && z < w.maxZ)) return true;
+    }
+    return false;
   }
 
   private darkenForOpening(): void {
@@ -3264,6 +3379,8 @@ export class Game {
       if (dist > step.range) continue;
       // Generous: anything touching the hero counts, the cone covers the rest.
       if (dist > 0.6 && this.tmp.normalize().dot(dir) < Math.cos(step.arc / 2)) continue;
+      // A swing doesn't reach through a wall.
+      if (dist > 0.8 && this.wallBetween(p, e.position)) continue;
       this.hitEnemy(e, step.damage, p, finisher ? 4.5 : 2.2);
     }
     this.smashCrates(p, step.range + 0.6, dir, step.arc);

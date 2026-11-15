@@ -48,6 +48,8 @@ export interface Crypt {
   connected: boolean;
   /** Rooms whose monsters wake when the hero walks in. */
   encounters: Encounter[];
+  /** Places out of sight where the pillar's monsters come from, and where they step into view. Halls without these use summoning circles. */
+  entrances?: { hide: THREE.Vector3; mouth: THREE.Vector3 }[];
 }
 
 const QUARTER = Math.PI / 2;
