@@ -2085,3 +2085,96 @@ kbd {
   left: 50%;
   transform: translateX(-50%);
 }
+
+/* ───────────── Touch screens (tablets and phones) ───────────── */
+
+canvas {
+  touch-action: none;
+}
+
+/* The floating joystick: shows where the left thumb landed. */
+.touch-stick {
+  position: fixed;
+  z-index: 6;
+  width: 112px;
+  height: 112px;
+  border: 2px solid rgba(244, 236, 216, 0.35);
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(244, 236, 216, 0.08), rgba(244, 236, 216, 0.16));
+  transform: translate(-50%, -50%);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.15s;
+}
+
+.touch-stick--on {
+  opacity: 1;
+}
+
+.touch-stick__knob {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 52px;
+  height: 52px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 40% 35%, #fff6dc, #d4af37 70%);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.5);
+  transform: translate(-50%, -50%);
+}
+
+/* The action bar becomes big round thumb buttons in the bottom-right corner,
+   with the attack button biggest, like Brawl Stars and Archero. */
+body.touch-mode .dock {
+  left: auto;
+  right: max(14px, env(safe-area-inset-right));
+  bottom: max(14px, env(safe-area-inset-bottom));
+  display: grid;
+  grid-template-columns: 62px 62px 104px;
+  grid-template-rows: 62px 62px;
+  gap: 12px;
+  padding: 0;
+  border: 0;
+  background: none;
+  backdrop-filter: none;
+  transform: none;
+}
+
+body.touch-mode .dock .slot {
+  width: 62px;
+  height: 62px;
+  border-radius: 50%;
+  touch-action: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+body.touch-mode .dock .slot[data-slot='0'] {
+  grid-column: 3;
+  grid-row: 1 / span 2;
+  align-self: end;
+  width: 104px;
+  height: 104px;
+}
+
+body.touch-mode .dock .slot[data-slot='0'] .slot__icon {
+  font-size: 56px;
+}
+
+body.touch-mode .slot__key,
+body.touch-mode .slot__name {
+  display: none;
+}
+
+body.touch-mode .dock .slot:active {
+  transform: scale(0.92);
+}
+
+/* Tips sit higher, clear of the thumbs. */
+body.touch-mode .hint {
+  bottom: 170px;
+}
+
+body.touch-mode button kbd {
+  display: none;
+}

@@ -342,6 +342,8 @@ export class Game {
         return this.audio.muted;
       },
       pause: () => this.setPaused(true),
+      slot: (code, down) => (down ? this.input.press(code) : this.input.release(code)),
+      isTouch: () => this.input.touchMode,
     });
 
     window.addEventListener('blur', () => {
@@ -1725,6 +1727,7 @@ export class Game {
     if (k.key('KeyS') || k.key('ArrowDown')) move.sub(this.forward);
     if (k.key('KeyD') || k.key('ArrowRight')) move.add(this.right);
     if (k.key('KeyA') || k.key('ArrowLeft')) move.sub(this.right);
+    if (k.stick.lengthSq() > 0) move.addScaledVector(this.forward, k.stick.y).addScaledVector(this.right, k.stick.x);
     if (move.lengthSq() > 1) move.normalize();
 
     this.raycaster.setFromCamera(k.pointer, this.camera);

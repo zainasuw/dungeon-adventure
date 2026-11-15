@@ -17,6 +17,18 @@ export class Input {
   rightTap = false;
   private rightTravel = 0;
   private dragTravel = 0;
+  /**
+   * Touch screens: a floating joystick (it appears wherever the left thumb
+   * lands, as in Brawl Stars and Archero). x = right, y = forward, length 0..1.
+   */
+  readonly stick = new THREE.Vector2();
+  /** True once the player has touched the screen; the HUD switches to big thumb buttons. */
+  touchMode = false;
+  private stickId: number | null = null;
+  private readonly stickOrigin = new THREE.Vector2();
+  private readonly stickBase: HTMLElement;
+  private readonly stickKnob: HTMLElement;
+  private static readonly STICK_RADIUS = 56;
 
   private readonly down = new Set<string>();
   private readonly pressed = new Set<string>();
@@ -31,6 +43,16 @@ export class Input {
     window.addEventListener('pointerup', this.onPointerUp);
     window.addEventListener('pointermove', this.onPointerMove);
     target.addEventListener('contextmenu', (e) => e.preventDefault());
+    // Any touch anywhere (menus too) switches the game to touch controls.
+    window.addEventListener('pointerdown', (e) => {
+      if (e.pointerType === 'touch') this.enterTouchMode();
+    }, { capture: true });
+    this.stickBase = document.createElement('div');
+    this.stickBase.className = 'touch-stick';
+    this.stickKnob = document.createElement('span');
+    this.stickKnob.className = 'touch-stick__knob';
+    this.stickBase.append(this.stickKnob);
+    document.body.append(this.stickBase);
     target.addEventListener('wheel', (e) => {
       e.preventDefault();
       // Up/down scroll (or pinch) zooms. Sideways trackpad swipes are ignored: they
@@ -54,6 +76,16 @@ export class Input {
 
   buttonPressed(index: number): boolean {
     return this.buttonsPressed[index];
+  }
+
+  /** Holds a key down from an on-screen button (touch controls). */
+  press(code: string): void {
+    if (!this.down.has(code)) this.pressed.add(code);
+    this.down.add(code);
+  }
+
+  release(code: string): void {
+    this.down.delete(code);
   }
 
   /** Forgets every held key, e.g. when the hero arrives in a new hall. */
@@ -87,6 +119,25 @@ export class Input {
   };
 
   private onPointerDown = (e: PointerEvent): void => {
+    if (e.pointerType === 'touch') {
+      this.enterTouchMode();
+      // Left half: the joystick appears under the thumb. Right half: tap to attack.
+      if (e.clientX < window.innerWidth * 0.5) {
+        if (this.stickId === null) {
+          this.stickId = e.pointerId;
+          this.stickOrigin.set(e.clientX, e.clientY);
+          this.stick.set(0, 0);
+          this.stickBase.style.left = `${e.clientX}px`;
+          this.stickBase.style.top = `${e.clientY}px`;
+          this.stickKnob.style.transform = 'translate(-50%, -50%)';
+          this.stickBase.classList.add('touch-stick--on');
+        }
+      } else {
+        this.press('KeyF');
+        window.setTimeout(() => this.release('KeyF'), 120);
+      }
+      return;
+    }
     this.updatePointer(e);
     if (e.button > 2) return;
     this.buttons[e.button] = true;
@@ -97,11 +148,37 @@ export class Input {
   };
 
   private onPointerUp = (e: PointerEvent): void => {
+    if (e.pointerType === 'touch') {
+      if (e.pointerId === this.stickId) this.endStick();
+      return;
+    }
     if (e.button === 2 && this.buttons[2] && this.rightTravel < 8) this.rightTap = true;
     if (e.button <= 2) this.buttons[e.button] = false;
   };
 
   private onPointerMove = (e: PointerEvent): void => {
+    if (e.pointerType === 'touch') {
+      if (e.pointerId !== this.stickId) return;
+      const r = Input.STICK_RADIUS;
+      let dx = e.clientX - this.stickOrigin.x;
+      let dy = e.clientY - this.stickOrigin.y;
+      const len = Math.hypot(dx, dy);
+      // The base follows a thumb that slides past the edge, so the stick never "runs out".
+      if (len > r) {
+        this.stickOrigin.x += (dx / len) * (len - r);
+        this.stickOrigin.y += (dy / len) * (len - r);
+        dx = (dx / len) * r;
+        dy = (dy / len) * r;
+        this.stickBase.style.left = `${this.stickOrigin.x}px`;
+        this.stickBase.style.top = `${this.stickOrigin.y}px`;
+      }
+      const dead = 0.15;
+      const m = Math.min(1, Math.hypot(dx, dy) / r);
+      const k = m < dead ? 0 : (m - dead) / (1 - dead) / Math.max(m, 1e-6);
+      this.stick.set((dx / r) * k, (-dy / r) * k);
+      this.stickKnob.style.transform = `translate(calc(-50% + ${dx}px), calc(-50% + ${dy}px))`;
+      return;
+    }
     if (this.buttons[1] || this.buttons[2]) {
       // Ignore the first few pixels so a click that wobbles doesn't turn the view.
       this.dragTravel += Math.abs(e.movementX) + Math.abs(e.movementY);
@@ -120,8 +197,21 @@ export class Input {
     this.pointerActive = true;
   }
 
+  private enterTouchMode(): void {
+    if (this.touchMode) return;
+    this.touchMode = true;
+    document.body.classList.add('touch-mode');
+  }
+
+  private endStick(): void {
+    this.stickId = null;
+    this.stick.set(0, 0);
+    this.stickBase.classList.remove('touch-stick--on');
+  }
+
   private reset = (): void => {
     this.down.clear();
     this.buttons.fill(false);
+    this.endStick();
   };
 }

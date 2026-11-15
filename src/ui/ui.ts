@@ -22,7 +22,12 @@ export interface UiHandlers {
   changeHero(): void;
   toggleMute(): boolean;
   pause(): void;
+  /** An action button on screen was pressed or let go (touch, or a mouse click on it). */
+  slot(code: string, down: boolean): void;
+  isTouch(): boolean;
 }
+
+const SLOT_CODE: Record<SlotKey, string> = { LMB: 'KeyF', RMB: 'KeyG', SPACE: 'Space', Q: 'KeyR' };
 
 export interface QuestStats {
   heroName: string;
@@ -189,7 +194,7 @@ export class Ui {
       `<button type="button" class="link-btn pick-back" data-act="back">‹ Back</button>
       <header class="pick-head">
         <h2 class="pick-title">Choose your hero</h2>
-        <p class="pick-help">Point at a hero or press <kbd>←</kbd> <kbd>→</kbd>, then <kbd>Enter</kbd>. Drag to spin them.</p>
+        <p class="pick-help">${this.handlers.isTouch() ? 'Tap a hero, then tap Start. Swipe to spin them.' : 'Point at a hero or press <kbd>←</kbd> <kbd>→</kbd>, then <kbd>Enter</kbd>. Drag to spin them.'}</p>
       </header>
       <div class="hero-row" role="radiogroup" aria-label="Heroes">${tags}</div>
       <button type="button" class="nav-arrow nav-arrow--prev" data-act="prev" aria-label="Previous hero">${icon('M336 64L144 256l192 192', 'icon icon--stroke')}</button>
@@ -482,6 +487,15 @@ export class Ui {
     return this.screen.dataset.screen ?? '';
   }
 
+  /** On touch screens, tips name the on-screen buttons instead of keys. */
+  private forTouch(html: string): string {
+    if (!this.handlers.isTouch()) return html;
+    if (html.includes('<kbd>W</kbd>')) return 'Walk: put your thumb on the <b>left side</b> of the screen and slide it';
+    if (html.includes('<kbd>Q</kbd>')) return 'Tap the <b>right side</b> of the screen to attack';
+    const names: Record<string, string> = { F: 'Attack', J: 'Attack', G: 'Special', Space: 'Dodge', R: 'Power', H: 'Potion', K: 'Special' };
+    return html.replace(/<kbd>([A-Za-z]+)<\/kbd>/g, (m, k: string) => (names[k] ? `<kbd>${names[k]}</kbd>` : m)).replace(/Press /g, 'Tap ').replace(/press /g, 'tap ');
+  }
+
   /** A big title card for entering a hall or claiming a pillar. */
   banner(kicker: string, title: string, sub: string, seconds = 2.8): void {
     this.bannerEl.innerHTML = `<p class="kicker">${kicker}</p><h2 class="banner__title">${title}</h2><p class="banner__sub">${sub}</p>`;
@@ -499,7 +513,7 @@ export class Ui {
       this.hintEl.classList.remove('hint--on');
       return;
     }
-    this.hintEl.innerHTML = html;
+    this.hintEl.innerHTML = this.forTouch(html);
     this.hintEl.classList.add('hint--on');
     this.hintTimer = window.setTimeout(() => this.hintEl.classList.remove('hint--on'), seconds * 1000);
   }
@@ -566,6 +580,20 @@ export class Ui {
         </div>
       </div>`;
     this.hud.querySelector('[data-act="pause"]')!.addEventListener('click', () => this.handlers.pause());
+    // The action buttons work as buttons too (big thumb buttons on touch screens).
+    const codes = [...def.abilities.map((a) => SLOT_CODE[a.key]), 'KeyH'];
+    this.hud.querySelectorAll<HTMLElement>('.dock .slot').forEach((slot, i) => {
+      const code = codes[i];
+      const up = (): void => this.handlers.slot(code, false);
+      slot.addEventListener('pointerdown', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        this.handlers.slot(code, true);
+      });
+      slot.addEventListener('pointerup', up);
+      slot.addEventListener('pointercancel', up);
+      slot.addEventListener('pointerleave', up);
+    });
     this.hpFill = this.hud.querySelector('.bar--hp .bar__fill')!;
     this.hpLag = this.hud.querySelector('.bar--hp .bar__lag')!;
     this.hpText = this.hud.querySelector('.bar--hp .bar__text')!;
@@ -637,9 +665,10 @@ export class Ui {
       this.promptEl.classList.remove('world-prompt--on');
       return;
     }
-    if (this.promptEl.dataset.text !== text) {
-      this.promptEl.dataset.text = text;
-      this.promptEl.innerHTML = text;
+    const key = `${this.handlers.isTouch()}${text}`;
+    if (this.promptEl.dataset.text !== key) {
+      this.promptEl.dataset.text = key;
+      this.promptEl.innerHTML = this.handlers.isTouch() ? text.replace(/<kbd>F<\/kbd>/g, '<kbd>Tap</kbd>') : text;
     }
     this.promptEl.style.transform = `translate(${x}px, ${y}px) translate(-50%, 0)`;
     this.promptEl.classList.add('world-prompt--on');
