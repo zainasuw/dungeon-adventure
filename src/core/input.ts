@@ -25,6 +25,13 @@ export class Input {
   /** True once the player has touched the screen; the HUD switches to big thumb buttons. */
   touchMode = false;
   private stickId: number | null = null;
+  /** First-person looking since the last frame: mouse (when locked) or a dragging thumb, in pixels. */
+  lookDX = 0;
+  lookDY = 0;
+  /** In first person a click captures the mouse so moving it looks around (like Minecraft). */
+  wantsPointerLock = false;
+  private lookId: number | null = null;
+  private lookTravel = 0;
   /** Right stick of a game controller: turns (x) and tilts (y) the camera. */
   readonly look = new THREE.Vector2();
   /** True once a game controller button has been pressed. */
@@ -184,6 +191,8 @@ export class Input {
 
   /** Call at the end of every frame. */
   endFrame(): void {
+    this.lookDX = 0;
+    this.lookDY = 0;
     this.dragX = 0;
     this.dragY = 0;
     this.wheel = 0;
@@ -218,10 +227,16 @@ export class Input {
           this.stickKnob.style.transform = 'translate(-50%, -50%)';
           this.stickBase.classList.add('touch-stick--on');
         }
-      } else {
-        this.press('KeyF');
-        window.setTimeout(() => this.release('KeyF'), 120);
+      } else if (this.lookId === null) {
+        // Right side: drag to look around, or a quick tap to attack.
+        this.lookId = e.pointerId;
+        this.lookTravel = 0;
       }
+      return;
+    }
+    if (e.button === 0 && this.wantsPointerLock && document.pointerLockElement !== this.target) {
+      // The first click only captures the mouse; it doesn't swing.
+      this.target.requestPointerLock?.();
       return;
     }
     this.updatePointer(e);
@@ -236,6 +251,13 @@ export class Input {
   private onPointerUp = (e: PointerEvent): void => {
     if (e.pointerType === 'touch') {
       if (e.pointerId === this.stickId) this.endStick();
+      if (e.pointerId === this.lookId) {
+        if (this.lookTravel < 12) {
+          this.press('KeyF');
+          window.setTimeout(() => this.release('KeyF'), 120);
+        }
+        this.lookId = null;
+      }
       return;
     }
     if (e.button === 2 && this.buttons[2] && this.rightTravel < 8) this.rightTap = true;
@@ -243,7 +265,20 @@ export class Input {
   };
 
   private onPointerMove = (e: PointerEvent): void => {
+    if (e.pointerType !== 'touch' && document.pointerLockElement === this.target) {
+      this.lookDX += e.movementX;
+      this.lookDY += e.movementY;
+      return;
+    }
     if (e.pointerType === 'touch') {
+      if (e.pointerId === this.lookId) {
+        this.lookTravel += Math.abs(e.movementX) + Math.abs(e.movementY);
+        if (this.lookTravel >= 12) {
+          this.lookDX += e.movementX * 1.6;
+          this.lookDY += e.movementY * 1.6;
+        }
+        return;
+      }
       if (e.pointerId !== this.stickId) return;
       const r = Input.STICK_RADIUS;
       let dx = e.clientX - this.stickOrigin.x;
@@ -287,6 +322,11 @@ export class Input {
     if (this.touchMode) return;
     this.touchMode = true;
     document.body.classList.add('touch-mode');
+  }
+
+  /** Lets the mouse go again (menus, pausing, switching views). */
+  releasePointer(): void {
+    if (document.pointerLockElement === this.target) document.exitPointerLock();
   }
 
   private endStick(): void {

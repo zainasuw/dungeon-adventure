@@ -445,7 +445,9 @@ export function buildCrypt(assets: Assets, embers: Particles, themeIndex = 0): C
   if (!out) {
     for (let i = 0; i < across; i++) {
       const x = -hx + 4 + i * 4;
-      if (!(ap && x === 0)) kit.instance('wall_half', x, 0, hz, Math.PI);
+      // Full walls, so first person feels like a real room. The title room keeps a low
+      // ledge: the menu camera looks in over it.
+      if (!(ap && x === 0)) kit.instance(themeIndex === 0 ? 'wall_half' : 'wall', x, 0, hz, Math.PI);
     }
     for (let i = 0; i < along; i++) {
       kit.instance(palette(theme.west, i), -hx, 0, -hz + 4 + i * 4, QUARTER);

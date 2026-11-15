@@ -2479,3 +2479,86 @@ body.touch-mode button kbd {
     font-size: 14px;
   }
 }
+
+/* ───────────── First-person waypoint ───────────── */
+
+.waypoint {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 2;
+  width: 0;
+  height: 0;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.25s;
+}
+
+.waypoint--on {
+  opacity: 1;
+}
+
+/* A glowing diamond over the goal. */
+.waypoint__pin {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 22px;
+  height: 22px;
+  border: 3px solid #fff;
+  border-radius: 4px;
+  background: var(--c);
+  box-shadow: 0 0 16px var(--c), 0 2px 8px rgba(0, 0, 0, 0.6);
+  transform: translate(-50%, -50%) rotate(45deg);
+  animation: waypoint-bob 1.6s ease-in-out infinite;
+}
+
+@keyframes waypoint-bob {
+  50% {
+    margin-top: -5px;
+  }
+}
+
+.waypoint__label {
+  position: absolute;
+  left: 0;
+  top: 20px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(10, 9, 14, 0.75);
+  font: 800 14px var(--sans);
+  color: #fff;
+  white-space: nowrap;
+  transform: translateX(-50%);
+}
+
+/* Off screen: an arrow on the edge pointing the way. */
+.waypoint__arrow {
+  position: absolute;
+  left: 0;
+  top: 0;
+  display: none;
+  width: 0;
+  height: 0;
+  border-top: 14px solid transparent;
+  border-bottom: 14px solid transparent;
+  border-left: 24px solid var(--c);
+  filter: drop-shadow(0 0 8px var(--c));
+}
+
+.waypoint--off .waypoint__arrow {
+  display: block;
+}
+
+.waypoint--off .waypoint__pin {
+  width: 14px;
+  height: 14px;
+  animation: none;
+  opacity: 0.8;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .waypoint__pin {
+    animation: none;
+  }
+}

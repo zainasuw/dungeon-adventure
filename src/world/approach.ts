@@ -64,7 +64,7 @@ export function buildApproach(o: ApproachOptions): Approach {
   const torchSpots: [number, number, number][] = [];
   const edge = (x: number, z: number, rot: number, low: boolean, outward: THREE.Vector2) => {
     if (style === 'stone') {
-      kit.instance(low ? 'wall_half' : pick(rng, ['wall', 'wall', 'wall_cracked', 'wall_arched']), x, 0, z, rot);
+      kit.instance(pick(rng, ['wall', 'wall', 'wall_cracked', 'wall_arched']), x, 0, z, rot);
     } else if (style === 'fence') {
       kit.instance(rng() < 0.25 ? 'hw_fence_broken' : 'hw_fence', x, 0, z, rot);
     } else if (low || [-0.6, 0, 0.6].some((d) => openAt(x + outward.x * 2.5 + d, z + outward.y * 2.5 + d))) {

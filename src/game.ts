@@ -67,6 +67,8 @@ interface JobItem {
   box: Crate['box'] | null;
   flash: number;
   seed: number;
+  /** Wisps: seconds of running and resting, in a loop. */
+  clock: number;
 }
 
 interface Crate {
@@ -212,14 +214,46 @@ export class Game {
   private chosen = 0;
   private camX = 0;
   private shoulder = 1.5;
-  /** 'behind': low camera behind the hero (default). 'top': the high view from above. V switches. */
-  private camStyle: 'behind' | 'top' = (() => {
+  /** The view "forward" was measured from when the current keys were pressed (see the input code). */
+  private lockYaw = 0;
+  private lockKeys = '0000';
+  private lockStick: number | null = null;
+  private readonly moveFwd = new THREE.Vector3();
+  private readonly moveRight = new THREE.Vector3();
+  /**
+   * 'first': through the hero's eyes, like wearing smart glasses (default).
+   * 'behind': low behind the hero. 'top': the high view from above. V cycles them.
+   */
+  private camStyle: 'first' | 'behind' | 'top' = (() => {
     try {
-      return localStorage.getItem('dungeon-adventure:camera') === 'top' ? 'top' : 'behind';
+      const v = localStorage.getItem('dungeon-adventure:view');
+      return v === 'top' || v === 'behind' ? v : 'first';
     } catch {
-      return 'behind';
+      return 'first';
     }
   })();
+  /** First person: where you're looking (yaw like the hero's facing; pitch up is positive). */
+  private lookYaw = Math.PI;
+  private lookPitch = -0.08;
+  /** 0..1 while the view glides from a cinematic shot into your eyes. */
+  private fpBlend = 0;
+  private readonly fpFrom = new THREE.Vector3();
+  private readonly fpFromQ = new THREE.Quaternion();
+  private readonly fpToQ = new THREE.Quaternion();
+  private readonly fpDummy = new THREE.Object3D();
+  private eyeHeight = 1.6;
+  /** First person: your weapon (and shield or book) in view, swinging when you attack. */
+  private viewmodel: { group: THREE.Group; right: THREE.Group | null; left: THREE.Group | null } | null = null;
+  private swingT = 1;
+  private swingKind: 'swing' | 'thrust' = 'swing';
+  private swingSide = 1;
+  private fpBodyHidden = false;
+  /** Where the guide is pointing (for the floating waypoint in first person). */
+  private readonly guidePoint = new THREE.Vector3();
+  private guideOn = false;
+  private get firstPerson(): boolean {
+    return this.camStyle === 'first' && this.phase === 'play' && this.hero.alive;
+  }
   private readonly occludeFn = (from: THREE.Vector3, to: THREE.Vector3): number => {
     const c = this.crypt.colliders;
     const dx = to.x - from.x;
@@ -316,8 +350,17 @@ export class Game {
     special: false,
   };
   private readonly events: HeroEvents = {
-    melee: (step, index) => this.onMelee(step, index),
-    cast: (ability, aim) => this.onCast(ability, aim),
+    melee: (step, index) => {
+      this.swingT = 0;
+      this.swingKind = 'swing';
+      this.swingSide = index % 2 ? -1 : 1;
+      this.onMelee(step, index);
+    },
+    cast: (ability, aim) => {
+      this.swingT = 0;
+      this.swingKind = 'thrust';
+      this.onCast(ability, aim);
+    },
     dash: (kind, from, to) => this.onDash(kind, from, to),
   };
 
@@ -416,6 +459,10 @@ export class Game {
   }
 
   start(): void {
+    // Letting the mouse go (Esc) in first person pauses, like Minecraft.
+    document.addEventListener('pointerlockchange', () => {
+      if (!document.pointerLockElement && this.input.wantsPointerLock && this.phase === 'play' && !this.paused && !this.choosing) this.setPaused(true);
+    });
     // Closing or hiding the tab mid-quest keeps the progress.
     window.addEventListener('pagehide', () => {
       if (this.phase === 'play' && this.step !== 'exiting') this.saveProgress();
@@ -620,6 +667,9 @@ export class Game {
     this.burst(start.clone().setY(1.1), this.heroColor, 60, 4.5);
     this.audio.play('start');
     this.introTimer = 1.6;
+    this.fpBlend = 0;
+    this.lookYaw = Math.PI;
+    this.lookPitch = -0.08;
     this.later(1.6, () => this.ui.showHud(true));
     this.saveProgress();
   }
@@ -760,8 +810,10 @@ export class Game {
       this.later((intro ? 1.1 : 0) + 3.4, () => this.ui.hint(this.jobIntro(), 6));
     }
     const delay = intro ? 1.1 : 0;
-    this.later(delay + 2.6, () => this.tip('walk', 'Walk with <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> or the arrow keys'));
-    this.later(delay + 9, () => this.tip('camera', 'Look around: right-click and drag, or hold <kbd>Q</kbd> / <kbd>E</kbd>'));
+    this.later(delay + 2.6, () =>
+      this.tip('walk', this.camStyle === 'first' ? 'Walk with <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd>. <b>Click</b>, then move the mouse to look around' : 'Walk with <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> or the arrow keys'),
+    );
+    this.later(delay + 9, () => this.tip('camera', this.camStyle === 'first' ? 'Turn your head with the mouse, the <kbd>←</kbd> <kbd>→</kbd> arrow keys, or <kbd>Q</kbd> / <kbd>E</kbd>' : 'Look around: right-click and drag, or hold <kbd>Q</kbd> / <kbd>E</kbd>'));
     if (level.boss) this.startBossFight(intro ? 2.4 : 0.8);
     const banner = level.boss
       ? () => this.ui.banner('Final battle', level.hall, 'Defeat the Skeleton King to escape!')
@@ -1277,7 +1329,7 @@ export class Game {
         box = { minX: x - half, maxX: x + half, minZ: z - half, maxZ: z + half };
         this.crypt.colliders.boxes.push(box);
       }
-      this.jobItems.push({ object, at, done: false, hp: job.kind === 'crystals' ? 3 : 1, light, box, flash: 0, seed: i * 1.7 });
+      this.jobItems.push({ object, at, done: false, hp: job.kind === 'crystals' ? 3 : 1, light, box, flash: 0, seed: i * 1.7, clock: i * 1.3 });
     });
     this.nav = new NavGrid(this.crypt.colliders);
   }
@@ -1360,16 +1412,19 @@ export class Game {
         // Drifts away from the hero, a bit slower than walking, so it can be caught.
         const away = this.tmp.copy(j.at).sub(hero.position).setY(0);
         const d = away.length();
-        if (d < 5.5 && d > 0.01) {
+        // It runs for a few seconds, then stops to rest (wobbling in place), so kids can catch it.
+        j.clock += dt;
+        const resting = j.clock % 4.5 > 3;
+        if (d < 5.5 && d > 0.01 && !resting) {
           away.divideScalar(d);
           const wobble = Math.sin(t * 2.3 + j.seed * 3) * 0.6;
-          j.at.x += (away.x + away.z * wobble) * 3.4 * dt;
-          j.at.z += (away.z - away.x * wobble) * 3.4 * dt;
+          j.at.x += (away.x + away.z * wobble) * 2.7 * dt;
+          j.at.z += (away.z - away.x * wobble) * 2.7 * dt;
           this.crypt.colliders.resolve(j.at, 0.5);
           j.object.position.copy(j.at);
         }
         if (Math.random() < dt * 20) this.glow.spawn({ x: j.at.x, y: wisp.position.y, z: j.at.z, vx: (Math.random() - 0.5) * 0.4, vy: 0.2, vz: (Math.random() - 0.5) * 0.4, life: 0.7, size: 0.1, sizeEnd: 0.01, color: this.wispColor, intensity: 3 });
-        if (hero.alive && d < 1.4) this.finishJobItem(j);
+        if (hero.alive && d < 1.8) this.finishJobItem(j);
         continue;
       }
       if (job.kind === 'books') {
@@ -1652,6 +1707,9 @@ export class Game {
     this.rig.focus.set(...shot.focus);
     this.establishing = 0.9;
     this.introTimer = 1.9;
+    this.fpBlend = 0;
+    this.lookYaw = this.hero.facing;
+    this.lookPitch = -0.08;
     this.input.clear();
     this.ui.showHud(true);
   }
@@ -1731,6 +1789,11 @@ export class Game {
     this.mist.update(dt);
 
     this.updateCamera(dt, t);
+    this.updateFirstPersonBody();
+    this.updateViewmodel(dt);
+    const capture = this.firstPerson && !this.paused && !this.choosing && !this.input.touchMode;
+    this.input.wantsPointerLock = capture;
+    if (!capture) this.input.releasePointer();
     this.moon.position.copy(this.rig.focus).add(new THREE.Vector3(-9, 22, 7));
     this.moon.target.position.copy(this.rig.focus);
     this.heroLight.position.copy(this.hero.position).add(new THREE.Vector3(0, 3.2, 0.6));
@@ -1741,6 +1804,150 @@ export class Game {
     this.glow.setScale(h, this.camera.fov);
     this.dust.setScale(h, this.camera.fov);
     if (this.phase === 'play') this.updateWorldUi();
+  }
+
+  /** Through the hero's eyes: at eye height, a touch in front of the face, no bobbing. */
+  private updateFirstPerson(dt: number): void {
+    const h = this.hero;
+    if (this.step === 'exiting') {
+      this.lookYaw = dampAngle(this.lookYaw, Math.PI, 4, dt);
+      this.lookPitch = THREE.MathUtils.damp(this.lookPitch, 0, 4, dt);
+    }
+    const yaw = this.lookYaw;
+    const cp = Math.cos(this.lookPitch);
+    const dir = this.tmp.set(Math.sin(yaw) * cp, Math.sin(this.lookPitch), Math.cos(yaw) * cp);
+    const pos = this.camTarget.copy(h.position).setY(h.position.y + this.eyeHeight);
+    pos.x += Math.sin(yaw) * 0.08;
+    pos.z += Math.cos(yaw) * 0.08;
+    this.fpDummy.position.copy(pos);
+    this.fpDummy.lookAt(pos.x + dir.x, pos.y + dir.y, pos.z + dir.z);
+    // Cameras look down their -Z, Object3D.lookAt points +Z: turn round.
+    this.fpDummy.rotateY(Math.PI);
+    if (this.fpBlend < 1) {
+      if (this.fpBlend === 0) {
+        this.fpFrom.copy(this.camera.position);
+        this.fpFromQ.copy(this.camera.quaternion);
+      }
+      this.fpBlend = Math.min(1, this.fpBlend + dt / 0.8);
+      const k = this.fpBlend * this.fpBlend * (3 - 2 * this.fpBlend);
+      this.camera.position.lerpVectors(this.fpFrom, pos, k);
+      this.camera.quaternion.slerpQuaternions(this.fpFromQ, this.fpToQ.copy(this.fpDummy.quaternion), k);
+    } else {
+      this.camera.position.copy(pos);
+      this.camera.quaternion.copy(this.fpDummy.quaternion);
+    }
+    // Keep the third-person rig lined up, so moving and switching views use the same "forward".
+    this.rig.yaw = yaw + Math.PI;
+    this.rig.setView(THREE.MathUtils.radToDeg(yaw + Math.PI), 15, 8.6);
+    this.rig.focus.copy(h.position);
+    this.rig.axes(this.forward, this.right);
+  }
+
+  /** Copies the hero's weapon (and shield or book) into the first-person view. */
+  private buildViewmodel(): void {
+    if (this.viewmodel) this.camera.remove(this.viewmodel.group);
+    const group = new THREE.Group();
+    const shown = (o: THREE.Object3D): boolean => {
+      // Only inside the model: the hero itself may be hidden on the menu right now.
+      for (let p: THREE.Object3D | null = o; p && p !== this.hero.root; p = p.parent) if (!p.visible) return false;
+      return true;
+    };
+    const RIGHT = /^(1H_Sword|2H_Sword|Knife|1H_Wand|2H_Staff|staff|Skeleton_Staff)$/;
+    const LEFT = /^(Round_Shield|Rectangle_Shield|Badge_Shield|Spike_Shield|Knife_Offhand|Spellbook_open|spellbook_open|Spellbook)$/;
+    let rightSrc: THREE.Object3D | null = null;
+    let leftSrc: THREE.Object3D | null = null;
+    this.hero.model.traverse((o) => {
+      if (!rightSrc && RIGHT.test(o.name) && shown(o)) rightSrc = o;
+      if (!leftSrc && LEFT.test(o.name) && shown(o)) leftSrc = o;
+    });
+    // Each piece stands upright in a pivot at the hand, drawn on top so walls never cut it.
+    const mount = (src: THREE.Object3D | null, size: number): THREE.Group | null => {
+      if (!src) return null;
+      const copy = src.clone(true);
+      copy.position.set(0, 0, 0);
+      copy.rotation.set(0, 0, 0);
+      copy.scale.set(1, 1, 1);
+      copy.updateMatrixWorld(true);
+      const box = new THREE.Box3().setFromObject(copy);
+      const ext = box.getSize(new THREE.Vector3());
+      if (ext.x >= ext.y && ext.x >= ext.z) copy.rotation.z = Math.PI / 2;
+      else if (ext.z >= ext.y && ext.z >= ext.x) copy.rotation.x = Math.PI / 2;
+      const inner = new THREE.Group();
+      inner.add(copy);
+      inner.updateMatrixWorld(true);
+      const b2 = new THREE.Box3().setFromObject(inner);
+      const len = Math.max(0.01, b2.max.y - b2.min.y);
+      const k = size / len;
+      inner.scale.setScalar(k);
+      inner.position.set(-((b2.min.x + b2.max.x) / 2) * k, -b2.min.y * k - size * 0.18, -((b2.min.z + b2.max.z) / 2) * k);
+      inner.traverse((o) => {
+        if (o instanceof THREE.Mesh) {
+          o.material = (o.material as THREE.Material).clone();
+          (o.material as THREE.Material).depthTest = false;
+          o.renderOrder = 10;
+          o.castShadow = false;
+          o.frustumCulled = false;
+        }
+      });
+      const pivot = new THREE.Group();
+      pivot.add(inner);
+      group.add(pivot);
+      return pivot;
+    };
+    const right = mount(rightSrc, /Staff|staff/.test((rightSrc as THREE.Object3D | null)?.name ?? '') ? 1.15 : 0.62);
+    const left = mount(leftSrc, /Shield/.test((leftSrc as THREE.Object3D | null)?.name ?? '') ? 0.42 : 0.36);
+    this.camera.add(group);
+    if (!this.camera.parent) this.scene.add(this.camera);
+    this.viewmodel = { group, right, left };
+  }
+
+  /** Holds the weapon low on the right, swaying a little; swings across on an attack. */
+  private updateViewmodel(dt: number): void {
+    const vm = this.viewmodel;
+    const show = this.firstPerson && this.establishing <= 0 && this.fpBlend >= 1 && this.step !== 'exiting';
+    if (!vm) return;
+    vm.group.visible = show;
+    if (!show) return;
+    const t = this.time;
+    const walking = this.hero.velocity.lengthSq() > 1;
+    const bob = walking ? Math.sin(t * 9) * 0.018 : Math.sin(t * 1.6) * 0.008;
+    this.swingT = Math.min(1, this.swingT + dt / 0.28);
+    const s = this.swingT;
+    const arc = Math.sin(s * Math.PI);
+    // Ease out: a fast cut, then a soft settle back.
+    const cut = 1 - Math.pow(1 - s, 3);
+    if (vm.right) {
+      vm.right.position.set(0.48, -0.5 + bob, -0.95);
+      vm.right.rotation.set(-0.3, 0, -0.32);
+      if (s < 1 && this.swingKind === 'swing') {
+        // A big sweep across the view: from raised on one side, cutting down across to the other.
+        const from = this.swingSide > 0 ? -0.9 : 1.1;
+        const to = this.swingSide > 0 ? 1.3 : -0.8;
+        vm.right.rotation.z = THREE.MathUtils.lerp(from, to, cut) * arc + -0.32 * (1 - arc);
+        vm.right.rotation.x = -0.3 - arc * 0.9;
+        vm.right.position.x = 0.48 - arc * 0.42;
+        vm.right.position.y = -0.5 + arc * 0.18;
+      } else if (s < 1) {
+        // Casting: push the staff forward.
+        vm.right.rotation.x = -0.3 - arc * 0.7;
+        vm.right.position.z = -0.95 - arc * 0.35;
+      }
+    }
+    if (vm.left) {
+      vm.left.position.set(-0.56, -0.58 - bob + (this.hero.state === 'dash' ? 0.1 : 0), -1.0);
+      vm.left.rotation.set(-0.2, 0.55, 0.2);
+    }
+  }
+
+  /** In first person the head and hat would block the view: hide them (you still see your body and feet). */
+  private updateFirstPersonBody(): void {
+    const hide = this.firstPerson;
+    if (hide === this.fpBodyHidden) return;
+    this.fpBodyHidden = hide;
+    this.hero.model.traverse((o) => {
+      // The weapons and arms are drawn in your hands instead (see buildViewmodel).
+      if (/(_Head|Helmet|_Hat|_Cape|_Arm|Sword|Shield|Knife|Staff|staff|Wand|Spellbook|spellbook|Crossbow)/.test(o.name)) o.visible = !hide;
+    });
   }
 
   /**
@@ -1763,7 +1970,7 @@ export class Game {
       this.rig.occlude = null;
       this.rig.followRate = 5;
     }
-    const playFov = behind ? this.fovFor(52, 72) : this.fovFor(30);
+    const playFov = this.firstPerson && this.establishing <= 0 ? this.fovFor(64, 84) : behind ? this.fovFor(52, 72) : this.fovFor(30);
     if (this.phase !== 'select' && this.phase !== 'title' && this.camera.fov !== playFov) {
       this.camera.fov = THREE.MathUtils.damp(this.camera.fov, playFov, 6, dt);
       if (Math.abs(this.camera.fov - playFov) < 0.05) this.camera.fov = playFov;
@@ -1789,6 +1996,10 @@ export class Game {
       this.rig.setView(0, 11, 8.4);
       this.rig.update(dt, t, this.camTarget.set(this.hero.position.x - (wide ? 2.3 : 0), wide ? 1.15 : 1.6, this.hero.position.z));
     } else {
+      if (this.firstPerson && this.establishing <= 0) {
+        this.updateFirstPerson(dt);
+        return;
+      }
       if (this.step === 'exiting') {
         // Stay in the room, a little lower and closer, watching the hero run into the light.
         this.rig.setView(0, 30, 12);
@@ -2014,21 +2225,53 @@ export class Game {
     const k = this.input;
     const move = this.heroInput.move.set(0, 0, 0);
     this.rig.axes(this.forward, this.right);
-    if (k.key('KeyW') || k.key('ArrowUp')) move.add(this.forward);
-    if (k.key('KeyS') || k.key('ArrowDown')) move.sub(this.forward);
-    if (k.key('KeyD') || k.key('ArrowRight')) move.add(this.right);
-    if (k.key('KeyA') || k.key('ArrowLeft')) move.sub(this.right);
-    if (k.stick.lengthSq() > 0) move.addScaledVector(this.forward, k.stick.y).addScaledVector(this.right, k.stick.x);
+    // While the same keys stay held, "forward" keeps meaning what it meant when you pressed
+    // them, even as the camera swings round behind you (Mario Odyssey's trick), so a
+    // following camera never bends your path into a circle. New keys, a turned stick,
+    // or turning the camera yourself picks up the new view.
+    const up = k.key('KeyW') || k.key('ArrowUp');
+    const down = k.key('KeyS') || k.key('ArrowDown');
+    const fp = this.firstPerson;
+    // In first person the left/right arrow keys turn your head instead of side-stepping.
+    const rightKey = k.key('KeyD') || (!fp && k.key('ArrowRight'));
+    const leftKey = k.key('KeyA') || (!fp && k.key('ArrowLeft'));
+    if (fp) {
+      const keyTurn = (k.key('ArrowLeft') || k.key('KeyQ') ? 1 : 0) - (k.key('ArrowRight') || k.key('KeyE') ? 1 : 0);
+      this.lookYaw += keyTurn * 2.3 * this.lastDt - (k.lookDX * 0.0024 + k.dragX * 0.004) - k.look.x * 2.8 * this.lastDt;
+      this.lookPitch = THREE.MathUtils.clamp(this.lookPitch - (k.lookDY * 0.0022 + k.dragY * 0.003) - k.look.y * 1.9 * this.lastDt, -1.15, 0.95);
+      if (keyTurn || k.lookDX || k.dragX || k.look.x) this.tipsShown.add('camera');
+      this.rig.yaw = this.lookYaw + Math.PI;
+      this.rig.axes(this.forward, this.right);
+    }
+    const keyState = `${+up}${+down}${+rightKey}${+leftKey}`;
+    const stickAngle = k.stick.lengthSq() > 0.04 ? Math.atan2(k.stick.x, k.stick.y) : null;
+    const stickTurned = stickAngle !== null && (this.lockStick === null || Math.abs(Math.atan2(Math.sin(stickAngle - this.lockStick), Math.cos(stickAngle - this.lockStick))) > 0.5);
+    const manualTurn = k.key('KeyQ') || k.key('KeyE') || Math.abs(k.dragX) > 0 || Math.abs(k.look.x) > 0;
+    if (keyState !== this.lockKeys || stickTurned || manualTurn || (keyState === '0000' && stickAngle === null) || this.camStyle !== 'behind') {
+      this.lockYaw = this.rig.yaw;
+      this.lockKeys = keyState;
+      this.lockStick = stickAngle;
+    }
+    const fwd = this.moveFwd.set(-Math.sin(this.lockYaw), 0, -Math.cos(this.lockYaw));
+    const side = this.moveRight.set(Math.cos(this.lockYaw), 0, -Math.sin(this.lockYaw));
+    if (up) move.add(fwd);
+    if (down) move.sub(fwd);
+    if (rightKey) move.add(side);
+    if (leftKey) move.sub(side);
+    if (k.stick.lengthSq() > 0) move.addScaledVector(fwd, k.stick.y).addScaledVector(side, k.stick.x);
     if (move.lengthSq() > 1) move.normalize();
 
     this.raycaster.setFromCamera(k.pointer, this.camera);
     const hasMouse = k.pointerActive && this.raycaster.ray.intersectPlane(this.floor, this.heroInput.aim) !== null;
     // Aim assist: snap to the best monster near where the player points, or the nearest one.
-    const target = this.autoTarget(hasMouse ? this.heroInput.aim : null);
+    // First person: the aim helper looks where you're looking.
+    if (fp) this.heroInput.aim.copy(this.hero.position).addScaledVector(this.forward, 6);
+    const target = this.autoTarget(hasMouse || fp ? this.heroInput.aim : null);
     const crystal = target ? null : this.nearCrystal(3.6);
     if (target) this.heroInput.aim.copy(target.position);
     // No monster close: swings aim at a cursed crystal within reach, so kids don't have to line up.
     else if (crystal) this.heroInput.aim.copy(crystal.at);
+    else if (fp) this.heroInput.aim.copy(this.hero.position).addScaledVector(this.forward, 3);
     else if (!hasMouse) {
       const dir = move.lengthSq() > 0.01 ? move : new THREE.Vector3(Math.sin(this.hero.facing), 0, Math.cos(this.hero.facing));
       this.heroInput.aim.copy(this.hero.position).add(dir);
@@ -2048,31 +2291,42 @@ export class Game {
     // Like Roblox: the left/right arrow keys turn the camera too.
     // Only deliberate turning: Q / E, or a real right-drag (see Input). Arrow keys walk.
     if (k.keyPressed('KeyV')) {
-      this.camStyle = this.camStyle === 'behind' ? 'top' : 'behind';
+      this.camStyle = this.camStyle === 'first' ? 'behind' : this.camStyle === 'behind' ? 'top' : 'first';
+      this.fpBlend = 0;
+      this.lookYaw = this.hero.facing;
+      if (this.camStyle !== 'first') {
+        // Carry the direction you were looking into the other views.
+        this.camYaw = THREE.MathUtils.radToDeg(this.lookYaw + Math.PI) - LEVELS[this.level].view.yaw;
+      }
       try {
-        localStorage.setItem('dungeon-adventure:camera', this.camStyle);
+        localStorage.setItem('dungeon-adventure:view', this.camStyle);
       } catch {
         // Storage can be off; the choice still works for this visit.
       }
       this.camPitch = 0;
-      this.ui.hint(this.camStyle === 'behind' ? 'Camera: <b>behind your hero</b>. Press <kbd>V</kbd> to switch.' : 'Camera: <b>view from above</b>. Press <kbd>V</kbd> to switch.', 2.5);
+      const names = { first: 'through your hero\'s eyes', behind: 'behind your hero', top: 'view from above' };
+      this.ui.hint(`Camera: <b>${names[this.camStyle]}</b>. Press <kbd>V</kbd> to switch.`, 2.5);
     }
-    const turn = (k.key('KeyQ') ? 1 : 0) - (k.key('KeyE') ? 1 : 0) - k.look.x;
+    const turn = fp ? 0 : (k.key('KeyQ') ? 1 : 0) - (k.key('KeyE') ? 1 : 0) - k.look.x;
     // Dragging with the right (or middle) button up and down tilts the view (or a controller's right stick).
-    this.camPitch = THREE.MathUtils.clamp(this.camPitch + k.dragY * 0.25 + k.look.y * 50 * this.lastDt, -22, 26);
-    this.camYaw += turn * 90 * this.lastDt - k.dragX * 0.3;
-    // Behind the hero: when walking forward, the view eases round behind them, slowly
-    // (Zelda-style). It never swings when you walk sideways or back, so it can't spin.
+    if (!fp) {
+      this.camPitch = THREE.MathUtils.clamp(this.camPitch + k.dragY * 0.25 + k.look.y * 50 * this.lastDt, -22, 26);
+      this.camYaw += turn * 90 * this.lastDt - k.dragX * 0.3;
+    }
+    // Behind the hero: the camera swings round behind the way you're running (Roblox's
+    // "Follow" camera), so you never have to keep fixing the view by hand. Not when you
+    // walk back toward the camera (it would spin right round), and not in a fight with
+    // a monster close by, where the view should hold still.
     if (this.camStyle === 'behind' && !turn && !k.dragX && move.lengthSq() > 0.2) {
-      const ahead = move.dot(this.forward) / Math.sqrt(move.lengthSq());
-      // Only when walking almost straight ahead: diagonal walking would otherwise run in circles.
-      if (ahead > 0.92) {
+      const toward = move.dot(this.moveFwd) / Math.sqrt(move.lengthSq());
+      const busy = this.step === 'fight' && this.nearestEnemy(this.hero.position, 4.5) !== null;
+      if (toward > -0.3 && !busy) {
         const v = LEVELS[this.level].view;
         const want = THREE.MathUtils.radToDeg(Math.atan2(move.x, move.z) + Math.PI) - v.yaw;
         let diff = (want - this.camYaw) % 360;
         if (diff > 180) diff -= 360;
         if (diff < -180) diff += 360;
-        this.camYaw += diff * Math.min(1, this.lastDt * 1.6 * ahead);
+        this.camYaw += diff * Math.min(1, this.lastDt * 2.2);
       }
     }
     if (k.wheel) this.camZoom = THREE.MathUtils.clamp(this.camZoom * (1 + k.wheel * 0.05), 0.7, 1.35);
@@ -2811,9 +3065,14 @@ export class Game {
     } else this.arrowTarget = null;
     // Show/hide with a gap between the two distances, so it doesn't blink on and off at the edge.
     const d = goal ? hero.position.distanceTo(goal) : 0;
+    this.guideOn = !!goal && hero.alive && d > 3;
+    if (goal) this.guidePoint.copy(goal);
     if (!goal || !hero.alive || d < 3.6) this.arrowShown = false;
     else if (d > 4.6) this.arrowShown = true;
     const mat = this.arrow.material as THREE.MeshBasicMaterial;
+    // First person: the floating waypoint shows the way instead (an arrow on the floor at
+    // your feet just fills the bottom of the screen).
+    if (this.firstPerson) this.arrowShown = false;
     // A slow, gentle breathe instead of a fast flash.
     mat.opacity = THREE.MathUtils.damp(mat.opacity, this.arrowShown ? 0.72 + Math.sin(this.time * 2) * 0.08 : 0, 6, dt);
     if (!goal) return;
@@ -3304,6 +3563,43 @@ export class Game {
     if (s.on) this.ui.float(text, s.x, s.y, kind);
   }
 
+  /**
+   * First person: a marker floats over where you need to go, with the distance
+   * (like waypoints in Fortnite or Zelda). Off screen, it sits on the edge and
+   * points the way.
+   */
+  private updateWaypoint(): void {
+    if (!this.firstPerson || !this.guideOn || this.paused || this.choosing || this.step === 'exiting' || this.introTimer > 0) {
+      this.ui.waypoint(null);
+      return;
+    }
+    const p = this.projected.copy(this.guidePoint).setY(this.guidePoint.y + 1.6).project(this.camera);
+    const canvas = this.renderer.gl.domElement;
+    const w = canvas.clientWidth;
+    const h = canvas.clientHeight;
+    let x = p.x;
+    let y = p.y;
+    const behind = p.z > 1;
+    if (behind) {
+      x = -x;
+      y = -y;
+    }
+    const margin = 0.86;
+    const off = behind || Math.abs(x) > margin || Math.abs(y) > margin;
+    if (off) {
+      // Push to the edge of the screen, in the direction of the goal.
+      const k = margin / Math.max(Math.abs(x), Math.abs(y), 1e-4);
+      x *= k;
+      y *= k;
+      if (behind && Math.abs(y) < 0.3) y = -margin * 0.4;
+    }
+    const sx = ((x + 1) / 2) * w;
+    const sy = ((1 - y) / 2) * h;
+    const dist = Math.round(this.guidePoint.distanceTo(this.hero.position));
+    const angle = Math.atan2(sy - h / 2, sx - w / 2);
+    this.ui.waypoint({ x: sx, y: sy, off, angle, label: `${dist} m`, color: this.step === 'fight' ? '#ff6a5a' : '#ffd166' });
+  }
+
   private updateWorldUi(): void {
     const frame = this.frameCount;
     for (const e of this.enemies) {
@@ -3312,6 +3608,7 @@ export class Game {
     }
     this.ui.sweepBars(frame);
 
+    this.updateWaypoint();
     if (this.paused) return;
     if (this.brazier && !this.brazier.lit && this.introTimer <= 0) {
       // Just under the torch, so it never hides behind the goal line at the top.
@@ -3363,6 +3660,10 @@ export class Game {
     if (previous) this.scene.remove(previous.root);
     this.scene.add(hero.root);
     this.hero = hero;
+    this.fpBodyHidden = false;
+    const box = new THREE.Box3().setFromObject(hero.model);
+    this.eyeHeight = Math.max(1.2, (box.max.y - box.min.y) * 0.84);
+    this.buildViewmodel();
     this.heroColor.set(hero.def.color);
     this.heroHot.set(hero.def.hot);
     if (previous?.root.visible) this.burst(hero.position.clone().setY(1), this.heroColor, 40, 4);
@@ -3471,7 +3772,7 @@ export class Game {
     const p = this.projected.copy(this.hero.position).setY(1.2).project(this.camera);
     const size = this.renderer.bufferSize;
     seeThrough.center.value.set(((p.x + 1) / 2) * size.x, ((p.y + 1) / 2) * size.y);
-    seeThrough.radius.value = this.hero.root.visible ? size.y * 0.13 : 0;
+    seeThrough.radius.value = this.hero.root.visible && !this.firstPerson ? size.y * 0.13 : 0;
     seeThrough.depth.value = -this.projected.copy(this.hero.position).setY(1.2).applyMatrix4(this.camera.matrixWorldInverse).z;
   }
 }

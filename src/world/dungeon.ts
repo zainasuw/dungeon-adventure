@@ -99,8 +99,8 @@ export function buildDungeon(assets: Assets, embers: Particles, themeIndex: numb
   let doorway: THREE.Group | null = null;
   const doorAt = new THREE.Vector3(0, 0, ALTAR_ROOM.z0);
   const torchSpots: [number, number, number][] = [];
-  const addWall = (x: number, z: number, rot: number, south: boolean, isHall: boolean) => {
-    const piece = south ? 'wall_half' : pick(rng, isHall ? ['wall', 'wall_cracked'] : wallMix);
+  const addWall = (x: number, z: number, rot: number, _south: boolean, isHall: boolean) => {
+    const piece = pick(rng, isHall ? ['wall', 'wall_cracked'] : wallMix);
     kit.instance(piece, x, 0, z, rot);
     const horizontal = rot === 0 || rot === Math.PI;
     colliders.add(x, z, horizontal ? 2 : 0.5, horizontal ? 0.5 : 2);

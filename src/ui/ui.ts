@@ -516,6 +516,28 @@ export class Ui {
 
   private shopLeave: (() => void) | null = null;
 
+  private waypointEl: HTMLElement | null = null;
+
+  /** The floating "go here" marker in first person, or null to hide it. */
+  waypoint(w: { x: number; y: number; off: boolean; angle: number; label: string; color: string } | null): void {
+    if (!w) {
+      this.waypointEl?.classList.remove('waypoint--on');
+      return;
+    }
+    if (!this.waypointEl) {
+      this.waypointEl = el('div', 'waypoint', '<span class="waypoint__pin"></span><span class="waypoint__arrow"></span><b class="waypoint__label"></b>');
+      this.root.append(this.waypointEl);
+    }
+    const e = this.waypointEl;
+    e.classList.add('waypoint--on');
+    e.classList.toggle('waypoint--off', w.off);
+    e.style.setProperty('--c', w.color);
+    e.style.transform = `translate(${w.x}px, ${w.y}px)`;
+    (e.querySelector('.waypoint__arrow') as HTMLElement).style.transform = `translate(-50%, -50%) rotate(${w.angle}rad)`;
+    const label = e.querySelector('.waypoint__label')!;
+    if (label.textContent !== w.label) label.textContent = w.label;
+  }
+
   /** The big health bar for the Skeleton King, or null to hide it. */
   bossBar(name: string | null, fraction: number): void {
     let bar = this.root.querySelector<HTMLElement>('.boss-bar');
