@@ -67,7 +67,7 @@ export class Game {
   readonly rig: CameraRig;
   readonly renderer: Renderer;
   readonly input: Input;
-  readonly crypt: Crypt;
+  crypt: Crypt;
   readonly ui: Ui;
   readonly audio = new Audio();
   /** Additive particles: embers, sparks, magic. */
@@ -107,6 +107,7 @@ export class Game {
   /** Tips already shown this session, so each one teaches once. */
   private readonly tipsShown = new Set<string>();
   private autoPotionCooldown = 0;
+  private hazardCooldown = 0;
   private arrow!: THREE.Mesh;
   private nav!: NavGrid;
   private navTimer = 0;
@@ -193,7 +194,7 @@ export class Game {
     this.scene.add(this.hemi, this.moon, this.moon.target, this.heroLight);
 
     for (const material of assets.kitMaterials) applySeeThrough(material);
-    this.crypt = buildCrypt(assets, this.glow);
+    this.crypt = buildCrypt(assets, this.glow, 0);
     this.scene.add(this.crypt.group, this.glow.points, this.dust.points);
     this.nav = new NavGrid(this.crypt.colliders);
     this.arrow = this.makeArrow();
@@ -488,6 +489,7 @@ export class Game {
     const level = LEVELS[index];
     this.level = index;
     this.clearActors();
+    if (this.crypt.theme !== index) this.buildHall(index);
     this.setMood(MOODS[level.mood]);
     this.crypt.altar.reset();
     this.crypt.altar.setDormantColor(level.crystal);
@@ -527,6 +529,15 @@ export class Game {
     if (intro) this.later(delay, banner);
     else banner();
     this.ui.fade(false);
+  }
+
+  /** Swaps in the room for a hall: its own floor, walls, pillars, props and traps. */
+  private buildHall(index: number): void {
+    this.scene.remove(this.crypt.group);
+    this.crypt = buildCrypt(this.assets, this.glow, index);
+    this.scene.add(this.crypt.group);
+    this.nav = new NavGrid(this.crypt.colliders);
+    this.navTimer = 0;
   }
 
   private clearActors(): void {
@@ -806,6 +817,7 @@ export class Game {
     this.updateProjectiles(dt);
     this.updateZones(dt);
     this.collectPickups();
+    this.updateHazards(dt);
 
     // The hall's steps.
     const altarDist = hero.position.distanceTo(this.crypt.altar.position);
@@ -1119,6 +1131,19 @@ export class Game {
       }
     }
     return best;
+  }
+
+  /** Spike traps: a sharp poke and a hop back if the hero steps on one. */
+  private updateHazards(dt: number): void {
+    this.hazardCooldown -= dt;
+    const hero = this.hero;
+    if (!hero.alive || this.hazardCooldown > 0) return;
+    const p = hero.position;
+    const trap = this.crypt.hazards.find((h) => Math.abs(p.x - h.x) < h.half && Math.abs(p.z - h.z) < h.half);
+    if (!trap) return;
+    this.hazardCooldown = 0.8;
+    this.tip('spikes', 'Ouch! Watch out for spike traps on the floor.');
+    this.damageHero(8 * Math.max(0.5, this.difficulty.enemyDamage), new THREE.Vector3(trap.x, 0, trap.z));
   }
 
   /** Teaches something once, the first time it matters. */
