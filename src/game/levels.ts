@@ -17,6 +17,7 @@ export type Job =
   | { kind: 'lanterns'; spots: [number, number][] }
   | { kind: 'books'; spots: [number, number][] }
   | { kind: 'crystals'; spots: [number, number][] }
+  | { kind: 'wisps'; spots: [number, number][] }
   | { kind: 'defend'; seconds: number };
 
 export interface Level {
@@ -62,12 +63,13 @@ export const LEVELS: Level[] = [
     intro: { yaw: 38, pitch: 30, distance: 21, focus: [0, 1, -1] },
     pillar: 'Encapsulation',
     hall: 'The Overgrown Hall',
-    blurb: 'A quiet hall full of sleeping skeletons.',
+    blurb: 'Catch the runaway wisps!',
     mood: 3,
     crystal: '#7dff9e',
     sleepers: ['skeleton', 'runt', 'skeleton', 'runt'],
     waves: [['skeleton', 'runt', 'runt']],
     potions: [[-13, -8], [13, 8.5]],
+    job: { kind: 'wisps', spots: [[-10, 6], [9, 6], [0, -8]] },
   },
   {
     view: { yaw: 0, pitch: 40, distance: 17 },

@@ -73,6 +73,11 @@ export function buildDungeon(assets: Assets, embers: Particles, themeIndex: numb
   const all = AREAS.reduce((b, r) => ({ x0: Math.min(b.x0, r.x0), x1: Math.max(b.x1, r.x1), z0: Math.min(b.z0, r.z0), z1: Math.max(b.z1, r.z1) }), { x0: 0, x1: 0, z0: 0, z1: 0 });
   // The walls themselves block movement, so the outer bounds only need to be loose.
   const colliders = new Colliders({ minX: all.x0 - 1, maxX: all.x1 + 1, minZ: all.z0 - 9, maxZ: all.z1 + 1 });
+  // Only the rooms, corridors and the passage behind the golden door are floor.
+  colliders.areas = [
+    ...AREAS.map((r) => ({ minX: r.x0, maxX: r.x1, minZ: r.z0, maxZ: r.z1 })),
+    { minX: -2.5, maxX: 2.5, minZ: all.z0 - 9, maxZ: ALTAR_ROOM.z0 + 0.5 },
+  ];
 
   // Floors.
   const small = ['floor_tile_small', 'floor_tile_small_broken_A', 'floor_tile_small_weeds_A', 'floor_tile_small_decorated'];

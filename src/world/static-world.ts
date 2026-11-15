@@ -11,8 +11,18 @@ export interface Box {
 /** Axis-aligned walls and props on the floor plane, plus the room's inner bounds. */
 export class Colliders {
   readonly boxes: Box[] = [];
+  /**
+   * The floor you may stand on, for places that aren't one big room (the
+   * connected dungeon). Outside all of them is solid, so nothing can end up
+   * out in the dark beyond the walls.
+   */
+  areas: Box[] | null = null;
 
   constructor(readonly bounds: Box) {}
+
+  private inArea(x: number, z: number): boolean {
+    return !this.areas || this.areas.some((a) => x >= a.minX && x <= a.maxX && z >= a.minZ && z <= a.maxZ);
+  }
 
   add(cx: number, cz: number, halfX: number, halfZ: number): void {
     this.boxes.push({ minX: cx - halfX, maxX: cx + halfX, minZ: cz - halfZ, maxZ: cz + halfZ });
@@ -29,6 +39,24 @@ export class Colliders {
     const b = this.bounds;
     p.x = THREE.MathUtils.clamp(p.x, b.minX + radius, b.maxX - radius);
     p.z = THREE.MathUtils.clamp(p.z, b.minZ + radius, b.maxZ - radius);
+    if (this.areas && !this.inArea(p.x, p.z)) {
+      // Slipped outside the floor: back onto the nearest bit of floor.
+      let best = Infinity;
+      let bx = p.x;
+      let bz = p.z;
+      for (const a of this.areas) {
+        const x = THREE.MathUtils.clamp(p.x, a.minX + radius, a.maxX - radius);
+        const z = THREE.MathUtils.clamp(p.z, a.minZ + radius, a.maxZ - radius);
+        const d = (x - p.x) ** 2 + (z - p.z) ** 2;
+        if (d < best) {
+          best = d;
+          bx = x;
+          bz = z;
+        }
+      }
+      p.x = bx;
+      p.z = bz;
+    }
     for (const box of this.boxes) {
       const cx = THREE.MathUtils.clamp(p.x, box.minX, box.maxX);
       const cz = THREE.MathUtils.clamp(p.z, box.minZ, box.maxZ);
@@ -59,6 +87,7 @@ export class Colliders {
   hits(x: number, z: number, radius: number): boolean {
     const b = this.bounds;
     if (x < b.minX + radius || x > b.maxX - radius || z < b.minZ + radius || z > b.maxZ - radius) return true;
+    if (!this.inArea(x, z)) return true;
     for (const box of this.boxes) {
       const cx = THREE.MathUtils.clamp(x, box.minX, box.maxX);
       const cz = THREE.MathUtils.clamp(z, box.minZ, box.maxZ);

@@ -114,6 +114,9 @@ export class Audio {
   }
 
   /** A cave you can hear: low wind, water dripping, and now and then a chain clinking. */
+  /** Which kind of place we're in, for its background sounds. */
+  place: 'cave' | 'night' | 'forest' | 'ember' = 'cave';
+
   private startAmbience(): void {
     const ctx = this.ctx!;
     const wind = ctx.createBufferSource();
@@ -133,7 +136,7 @@ export class Audio {
     wind.connect(band).connect(windGain).connect(this.master!);
     wind.start();
     const drip = (): void => {
-      if (!this.muted && ctx.state === 'running') {
+      if (!this.muted && ctx.state === 'running' && this.place === 'cave') {
         const at = ctx.currentTime;
         const f = 900 + Math.random() * 900;
         this.tone(at, [f, f * 0.55], 0.12, 'sine', 0.035);
@@ -142,14 +145,40 @@ export class Audio {
       window.setTimeout(drip, 900 + Math.random() * 3200);
     };
     const chains = (): void => {
-      if (!this.muted && ctx.state === 'running') {
+      if (!this.muted && ctx.state === 'running' && this.place === 'cave') {
         const at = ctx.currentTime;
         for (let i = 0; i < 4; i++) this.click(at + i * 0.07 + Math.random() * 0.03, 3000 + Math.random() * 2000);
       }
       window.setTimeout(chains, 11000 + Math.random() * 16000);
     };
+    // Outdoors and in the Ember Deep: crickets and an owl at night, birds in the
+    // forest, crackling in the hot cave.
+    const life = (): void => {
+      let next = 2000;
+      if (!this.muted && ctx.state === 'running') {
+        const at = ctx.currentTime;
+        if (this.place === 'night') {
+          for (let i = 0; i < 6; i++) this.tone(at + i * 0.045, [4400, 4300], 0.025, 'sine', 0.012);
+          if (Math.random() < 0.18) {
+            this.tone(at + 0.4, [390, 360], 0.35, 'sine', 0.05);
+            this.tone(at + 0.85, [380, 330], 0.5, 'sine', 0.045);
+          }
+          next = 1300 + Math.random() * 2200;
+        } else if (this.place === 'forest') {
+          const f = 2200 + Math.random() * 900;
+          const notes = 2 + Math.floor(Math.random() * 3);
+          for (let i = 0; i < notes; i++) this.tone(at + i * 0.13, [f, f * 1.35], 0.08, 'sine', 0.03);
+          next = 1800 + Math.random() * 3800;
+        } else if (this.place === 'ember') {
+          for (let i = 0; i < 3; i++) this.click(at + Math.random() * 0.3, 700 + Math.random() * 900);
+          next = 400 + Math.random() * 900;
+        }
+      }
+      window.setTimeout(life, next);
+    };
     window.setTimeout(drip, 700);
     window.setTimeout(chains, 6000);
+    window.setTimeout(life, 1500);
   }
 
   play(name: Sfx): void {

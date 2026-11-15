@@ -114,6 +114,8 @@ export class Game {
   readonly glow = new Particles(4000, true, 0.1);
   /** Alpha-blended particles: dust, smoke, bone shards. */
   readonly dust = new Particles(1500, false, 0.35);
+  /** Very soft puffs that fade from the middle out, for ground fog. */
+  readonly mist = new Particles(200, false, 0);
 
   mood: Mood = MOODS[1];
   hero!: Hero;
@@ -147,6 +149,7 @@ export class Game {
   private readonly portalTexture = Game.makePortalTexture();
   private readonly portalColor = new THREE.Color('#b25cff');
   private jobItems: JobItem[] = [];
+  private readonly wispColor = new THREE.Color('#9dffb8');
   private jobNag = 0;
   /** Seconds left to hold out in a "defend" hall (0 when not defending). */
   private defendLeft = 0;
@@ -309,7 +312,7 @@ export class Game {
     for (const material of assets.kitMaterials) applySeeThrough(material);
     for (const material of assets.outdoorMaterials) applySeeThrough(material);
     this.crypt = buildCrypt(assets, this.glow, 0);
-    this.scene.add(this.crypt.group, this.glow.points, this.dust.points, this.bats.group);
+    this.scene.add(this.crypt.group, this.glow.points, this.dust.points, this.mist.points, this.bats.group);
     this.nav = new NavGrid(this.crypt.colliders);
     this.arrow = this.makeArrow();
     this.scene.add(this.arrow);
@@ -638,6 +641,7 @@ export class Game {
       : { minX: -(c.halfX - 8), maxX: c.halfX - 8, minZ: -(c.halfZ - 3.8), maxZ: c.halfZ - 8.4 };
     this.rig.bounds = { ...this.sceneBounds };
     this.setMood(MOODS[level.mood]);
+    this.audio.place = index === 5 ? 'night' : index === 6 ? 'forest' : index === 3 ? 'ember' : 'cave';
     this.crypt.altar.reset();
     this.crypt.altar.setDormantColor(level.crystal);
     this.crypt.door.reset(this.pillars);
@@ -922,6 +926,59 @@ export class Game {
     }
   }
 
+  // ───────────────────────── Room life ─────────────────────────
+
+  private readonly lifeColors = {
+    fog: new THREE.Color('#9aa6b8'),
+    firefly: new THREE.Color('#e4ff7a'),
+    leaf: new THREE.Color('#6fae4a'),
+    mote: new THREE.Color('#bfe6ff'),
+    ember: new THREE.Color('#ff7a2a'),
+    royal: new THREE.Color('#c77dff'),
+    dust: new THREE.Color('#e8d6a8'),
+  };
+
+  /**
+   * Small things always moving, different in every hall, so no room ever
+   * looks frozen: ground fog in the graveyard, fireflies in the forest,
+   * falling leaves in the overgrown hall, floating dust in the library,
+   * embers in the Ember Deep, royal sparks around the King's throne.
+   */
+  private updateRoomLife(dt: number): void {
+    const c = this.crypt.center;
+    const hx = Math.min(this.crypt.halfX, 18);
+    const hz = Math.min(this.crypt.halfZ, 16);
+    const rx = () => c.x + (Math.random() * 2 - 1) * hx;
+    const rz = () => c.z + (Math.random() * 2 - 1) * hz;
+    const col = this.lifeColors;
+    const chance = (perSecond: number) => Math.random() < perSecond * dt;
+    switch (this.level) {
+      case 5: // Graveyard: low fog rolling over the ground.
+        if (chance(4)) this.mist.spawn({ x: rx(), y: 0.3, z: rz(), vx: 0.45 + Math.random() * 0.3, vy: 0.01, life: 7, size: 3.2, sizeEnd: 4.4, color: col.fog, intensity: 0.13, drag: 0.05 });
+        if (chance(1.5)) this.glow.spawn({ x: rx(), y: 0.6 + Math.random(), z: rz(), vx: (Math.random() - 0.5) * 0.3, vy: 0.1, vz: (Math.random() - 0.5) * 0.3, life: 3, size: 0.06, sizeEnd: 0.02, color: col.mote, intensity: 2 });
+        break;
+      case 6: // Forest: fireflies wandering.
+        if (chance(6)) this.glow.spawn({ x: rx(), y: 0.4 + Math.random() * 2, z: rz(), vx: (Math.random() - 0.5) * 0.6, vy: (Math.random() - 0.5) * 0.3, vz: (Math.random() - 0.5) * 0.6, life: 3.5, size: 0.09, sizeEnd: 0.04, color: col.firefly, intensity: 3 });
+        if (chance(2)) this.dust.spawn({ x: rx(), y: 5 + Math.random() * 2, z: rz(), vx: 0.4, vy: -0.6, life: 7, size: 0.18, sizeEnd: 0.16, color: col.leaf, intensity: 0.9, drag: 0.1 });
+        break;
+      case 1: // Overgrown: leaves drifting down from the vines.
+        if (chance(4)) this.dust.spawn({ x: rx(), y: 5 + Math.random() * 2, z: rz(), vx: (Math.random() - 0.5) * 0.6, vy: -0.55, vz: (Math.random() - 0.5) * 0.4, life: 8, size: 0.2, sizeEnd: 0.18, color: col.leaf, intensity: 0.9, drag: 0.1 });
+        if (chance(2)) this.glow.spawn({ x: rx(), y: 0.5 + Math.random() * 1.5, z: rz(), vx: (Math.random() - 0.5) * 0.4, vz: (Math.random() - 0.5) * 0.4, life: 3, size: 0.08, sizeEnd: 0.03, color: col.firefly, intensity: 2.5 });
+        break;
+      case 2: // Library: dust floating in the cold light.
+        if (chance(8)) this.glow.spawn({ x: rx(), y: 0.5 + Math.random() * 3.5, z: rz(), vx: (Math.random() - 0.5) * 0.15, vy: 0.05, vz: (Math.random() - 0.5) * 0.15, life: 5, size: 0.05, sizeEnd: 0.05, color: col.mote, intensity: 1.4 });
+        break;
+      case 3: // Ember Deep: sparks rising off the hot floor.
+        if (chance(10)) this.glow.spawn({ x: rx(), y: 0.1, z: rz(), vx: (Math.random() - 0.5) * 0.4, vy: 1 + Math.random() * 1.2, vz: (Math.random() - 0.5) * 0.4, life: 2, size: 0.07, sizeEnd: 0.01, color: col.ember, intensity: 3.5 });
+        break;
+      case 4: // Throne: royal sparks drifting up.
+        if (chance(5)) this.glow.spawn({ x: rx(), y: 0.2, z: rz(), vy: 0.5 + Math.random() * 0.5, life: 4, size: 0.07, sizeEnd: 0.01, color: col.royal, intensity: 2.5 });
+        break;
+      default: // Old Crypt and the torchlit hall: dust drifting in the air.
+        if (chance(5)) this.glow.spawn({ x: rx(), y: 0.5 + Math.random() * 3, z: rz(), vx: (Math.random() - 0.5) * 0.15, vy: -0.03, vz: (Math.random() - 0.5) * 0.15, life: 5, size: 0.04, sizeEnd: 0.04, color: col.dust, intensity: 1.2 });
+    }
+  }
+
   // ───────────────────────── Hall jobs ─────────────────────────
 
   private placeJob(): void {
@@ -941,6 +998,15 @@ export class Game {
         light = new THREE.PointLight('#ffb347', 0, 11, 2);
         light.position.set(0, 1.6, 0);
         object.add(light);
+      } else if (job.kind === 'wisps') {
+        object = new THREE.Group();
+        const wisp = new THREE.Mesh(
+          new THREE.SphereGeometry(0.28, 16, 12),
+          new THREE.MeshStandardMaterial({ color: '#d9ffe6', emissive: '#7dff9e', emissiveIntensity: 3 }),
+        );
+        wisp.name = 'wisp';
+        wisp.position.y = 1.2;
+        object.add(wisp);
       } else if (job.kind === 'books') {
         object = new THREE.Group();
         const book = makeBook(['#6b3fa0', '#2f6db5', '#a83a3a'][i % 3]);
@@ -959,13 +1025,13 @@ export class Game {
       mark.name = 'mark';
       mark.rotation.x = -Math.PI / 2;
       mark.position.y = 0.06;
-      mark.scale.setScalar(job.kind === 'books' ? 0.85 : 1.3);
+      mark.scale.setScalar(job.kind === 'books' || job.kind === 'wisps' ? 0.85 : 1.3);
       mark.renderOrder = 2;
       object.add(mark);
       if (job.kind === 'books') object.getObjectByName('book')!.scale.setScalar(1.45);
       object.position.copy(at);
       this.scene.add(object);
-      if (job.kind !== 'books') {
+      if (job.kind === 'lanterns' || job.kind === 'crystals') {
         const half = job.kind === 'crystals' ? 0.6 : 0.35;
         box = { minX: x - half, maxX: x + half, minZ: z - half, maxZ: z + half };
         this.crypt.colliders.boxes.push(box);
@@ -996,6 +1062,7 @@ export class Game {
     if (job?.kind === 'lanterns') return `Light the lanterns: ${done} of ${n}`;
     if (job?.kind === 'books') return `Find the lost books: ${done} of ${n}`;
     if (job?.kind === 'crystals') return `Smash the cursed crystals: ${done} of ${n}`;
+    if (job?.kind === 'wisps') return `Catch the wisps: ${done} of ${n}`;
     return '';
   }
 
@@ -1005,6 +1072,7 @@ export class Game {
     if (job?.kind === 'lanterns') return `Light the <b>${n} lanterns</b> to wake the pillar. Walk up and press <kbd>F</kbd>. Careful, the graves are restless!`;
     if (job?.kind === 'books') return `Find the <b>${n} lost spell books</b> to wake the pillar. Walk over a book to grab it.`;
     if (job?.kind === 'crystals') return `Smash the <b>${n} cursed crystals</b> to wake the pillar. Hit each one with <kbd>F</kbd>.`;
+    if (job?.kind === 'wisps') return `Catch the <b>${n} runaway wisps</b> to wake the pillar. They float away, so chase them into a corner!`;
     return '';
   }
 
@@ -1043,6 +1111,25 @@ export class Game {
       if (mark) {
         mark.rotation.z = t * 0.5 + j.seed;
         ((mark as THREE.Mesh).material as THREE.MeshBasicMaterial).opacity = j.done ? 0 : 0.55 + Math.sin(t * 2.2 + j.seed) * 0.15;
+      }
+      if (job.kind === 'wisps') {
+        if (j.done) continue;
+        const wisp = j.object.getObjectByName('wisp')!;
+        wisp.position.y = 1.1 + Math.sin(t * 3 + j.seed) * 0.25;
+        // Drifts away from the hero, a bit slower than walking, so it can be caught.
+        const away = this.tmp.copy(j.at).sub(hero.position).setY(0);
+        const d = away.length();
+        if (d < 5.5 && d > 0.01) {
+          away.divideScalar(d);
+          const wobble = Math.sin(t * 2.3 + j.seed * 3) * 0.6;
+          j.at.x += (away.x + away.z * wobble) * 3.4 * dt;
+          j.at.z += (away.z - away.x * wobble) * 3.4 * dt;
+          this.crypt.colliders.resolve(j.at, 0.5);
+          j.object.position.copy(j.at);
+        }
+        if (Math.random() < dt * 20) this.glow.spawn({ x: j.at.x, y: wisp.position.y, z: j.at.z, vx: (Math.random() - 0.5) * 0.4, vy: 0.2, vz: (Math.random() - 0.5) * 0.4, life: 0.7, size: 0.1, sizeEnd: 0.01, color: this.wispColor, intensity: 3 });
+        if (hero.alive && d < 1.4) this.finishJobItem(j);
+        continue;
       }
       if (job.kind === 'books') {
         const book = j.object.getObjectByName('book')!;
@@ -1100,11 +1187,11 @@ export class Game {
     j.done = true;
     const kind = LEVELS[this.level].job?.kind;
     const easy = this.difficulty.id === 'easy';
-    if (kind === 'books') {
+    if (kind === 'books' || kind === 'wisps') {
       this.scene.remove(j.object);
       this.audio.play('pickup');
       this.burst(j.at.clone().setY(1), this.gold, 30, 3.5);
-      this.floatAt(j.at, 1.8, 'Book found!', 'heal');
+      this.floatAt(j.at, 1.8, kind === 'wisps' ? 'Caught!' : 'Book found!', 'heal');
       // A guardian answers the alarm.
       this.summonNear(j.at, [easy ? 'runt' : 'skeleton']);
     } else if (kind === 'lanterns') {
@@ -1397,6 +1484,7 @@ export class Game {
     this.spawnDust(dt);
     this.glow.update(dt);
     this.dust.update(dt);
+    this.mist.update(dt);
 
     this.updateCamera(dt, t);
     this.moon.position.copy(this.rig.focus).add(new THREE.Vector3(-9, 22, 7));
@@ -1517,7 +1605,9 @@ export class Game {
     this.updateZones(dt);
     this.collectPickups();
     this.updateHazards(dt);
-    this.bats.update(dt, this.time, this.crypt.center, this.crypt.halfX, this.crypt.halfZ);
+    // Bats under a roof or the night sky, not in the sunny forest.
+    if (this.level !== 6) this.bats.update(dt, this.time, this.crypt.center, this.crypt.halfX, this.crypt.halfZ);
+    this.updateRoomLife(dt);
     // Dust drifting down through the moonlight where the hero fell in.
     if (this.crypt.connected && Math.random() < 0.5) {
       const h = this.crypt.heroStart;
@@ -2571,6 +2661,19 @@ export class Game {
   }
 
   private onDash(kind: 'roll' | 'shadowstep' | 'blink', from: THREE.Vector3, to: THREE.Vector3): void {
+    // Stop the dash at the first wall, so a quick step can never skip through one.
+    const r = this.hero.radius;
+    const dir = this.tmp.copy(to).sub(from).setY(0);
+    const len = dir.length();
+    if (len > 0.01) {
+      dir.divideScalar(len);
+      let safe = 0;
+      for (let d = 0.2; d <= len + 1e-6; d += 0.2) {
+        if (this.crypt.colliders.hits(from.x + dir.x * d, from.z + dir.z * d, r * 0.9)) break;
+        safe = d;
+      }
+      to.set(from.x + dir.x * safe, to.y, from.z + dir.z * safe);
+    }
     this.ui.pulseSlot(2);
     const steps = kind === 'roll' ? 8 : 18;
     for (let i = 0; i <= steps; i++) {
