@@ -2954,3 +2954,136 @@ body.menu-open .crosshair {
     gap: 6px;
   }
 }
+
+/* ───────────── First person: where a blow came from, and a threat out of view ───────────── */
+
+/* A red arc on a ring round the middle of the view, turned toward the attacker; fades in half a second. */
+.hitdir {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  z-index: 3;
+  width: 120px;
+  height: 46px;
+  pointer-events: none;
+  transform: translate(-50%, -50%) rotate(var(--a)) translateY(-150px);
+  background: radial-gradient(ellipse at 50% 100%, rgba(255, 60, 50, 0.95), rgba(255, 60, 50, 0.4) 55%, transparent 72%);
+  animation: hitdir-fade 0.55s ease-out forwards;
+}
+
+@keyframes hitdir-fade {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+    transform: translate(-50%, -50%) rotate(var(--a)) translateY(-200px);
+  }
+}
+
+/* A pulsing chevron on the same ring for a monster winding up that you can't see. */
+.threat {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  z-index: 3;
+  width: 0;
+  height: 0;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.15s;
+  transform: translate(-50%, -50%) rotate(var(--a));
+}
+
+.threat--on {
+  opacity: 1;
+}
+
+.threat span {
+  position: absolute;
+  left: -16px;
+  top: -190px;
+  width: 32px;
+  height: 32px;
+  clip-path: polygon(50% 0, 100% 100%, 50% 72%, 0 100%);
+  background: #ff5a4a;
+  box-shadow: 0 0 18px rgba(255, 70, 60, 0.9);
+  animation: threat-pulse 0.5s ease-in-out infinite alternate;
+}
+
+@keyframes threat-pulse {
+  from {
+    transform: scale(0.9);
+  }
+  to {
+    transform: scale(1.15);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .threat span {
+    animation: none;
+  }
+}
+
+/* Phones held sideways: the hero card is a strip along the bottom (name, difficulty, Start),
+   so the heroes and their name tags stay in view above it. */
+@media (max-height: 480px) {
+  .pick-card {
+    bottom: 8px;
+    grid-template-columns: auto minmax(0, 1fr);
+    align-items: center;
+    gap: 14px;
+    width: min(760px, calc(100% - 24px));
+    padding: 8px 14px;
+  }
+
+  .pick-card__info {
+    grid-template-columns: 1fr;
+    grid-template-areas: 'name';
+    row-gap: 0;
+  }
+
+  .pick-card__blurb,
+  .pick-card__power,
+  .pick-card__stats,
+  .pick-card__hint {
+    display: none;
+  }
+
+  .pick-card__name {
+    font-size: 22px;
+    margin: 0;
+    white-space: nowrap;
+  }
+
+  .pick-card__start {
+    grid-template-columns: auto 1fr;
+    align-items: center;
+    gap: 10px;
+    min-width: 0;
+  }
+
+  .pick-card__go {
+    padding-top: 10px;
+    padding-bottom: 10px;
+  }
+
+  .pick-head {
+    top: 8px;
+  }
+
+  .pick-title {
+    font-size: 22px;
+  }
+
+  .pick-help {
+    display: none;
+  }
+
+  .nav-arrow {
+    top: 40%;
+    width: 44px;
+    height: 44px;
+  }
+}

@@ -560,6 +560,30 @@ export class Ui {
     this.crossEl.dataset.state = state;
   }
 
+  private threatEl: HTMLElement | null = null;
+
+  /** A red flash at the edge of the view in the direction a blow came from (first person). */
+  hitFrom(angle: number): void {
+    const node = el('div', 'hitdir');
+    node.style.setProperty('--a', `${angle}rad`);
+    this.root.append(node);
+    node.addEventListener('animationend', () => node.remove(), { once: true });
+  }
+
+  /** A red chevron at the edge of the view toward a monster that is about to strike from out of view, or null. */
+  threat(angle: number | null): void {
+    if (angle === null) {
+      this.threatEl?.classList.remove('threat--on');
+      return;
+    }
+    if (!this.threatEl) {
+      this.threatEl = el('div', 'threat', '<span></span>');
+      this.root.append(this.threatEl);
+    }
+    this.threatEl.style.setProperty('--a', `${angle}rad`);
+    this.threatEl.classList.add('threat--on');
+  }
+
   /** The floating "go here" marker in first person, or null to hide it. */
   waypoint(w: { x: number; y: number; off: boolean; angle: number; label: string; color: string } | null): void {
     if (!w) {

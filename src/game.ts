@@ -244,6 +244,24 @@ export class Game {
   private readonly fpToQ = new THREE.Quaternion();
   private readonly fpDummy = new THREE.Object3D();
   private eyeHeight = 1.6;
+  /**
+   * First-person options, each one switchable on its own so they can be compared:
+   * eye = fraction of the model's height; fov in degrees; weaponScale 1 = small hand
+   * models tucked in the corners (1.5 = the old large ones); tilt = look down a little
+   * while a monster is in reach; markers = hit-direction flash and off-screen threat chevron.
+   */
+  readonly fp = { eye: 0.64, fov: 70, weaponScale: 1, tilt: true, markers: true };
+
+  /** Applies changed first-person options (eye height and hand models need rebuilding). */
+  setFpOptions(o: Partial<typeof this.fp>): void {
+    Object.assign(this.fp, o);
+    const box = new THREE.Box3().setFromObject(this.hero.model);
+    this.eyeHeight = Math.max(1.2, (box.max.y - box.min.y) * this.fp.eye);
+    this.buildViewmodel();
+  }
+  /** First person: a gentle downward tilt while a monster is close, unless the player is steering the view. */
+  private fpTilt = 0;
+  private lastLookInput = -10;
   /** First person: your weapon (and shield or book) in view, swinging when you attack. */
   private viewmodel: { group: THREE.Group; right: THREE.Group | null; left: THREE.Group | null } | null = null;
   private swingT = 1;
@@ -256,6 +274,9 @@ export class Game {
   private get firstPerson(): boolean {
     return this.camStyle === 'first' && this.phase === 'play' && this.hero.alive;
   }
+  private walls: { minX: number; maxX: number; minZ: number; maxZ: number }[] = [];
+  private wallsOf: object | null = null;
+  private wallCount = -1;
   private readonly occludeFn = (from: THREE.Vector3, to: THREE.Vector3): number => {
     const c = this.crypt.colliders;
     const dx = to.x - from.x;
@@ -264,12 +285,17 @@ export class Game {
     if (len < 0.01) return 1;
     // Only walls and the room's edge pull the camera in; small things (crates, crystals,
     // braziers, pillars) are faded by the see-through effect instead.
-    // Walls are long and thin; the altar and props are not.
-    const big = c.boxes.filter((b) => {
-      const w = b.maxX - b.minX;
-      const d = b.maxZ - b.minZ;
-      return Math.max(w, d) > 2.2 && Math.min(w, d) < 1.3;
-    });
+    // Walls are long and thin; the altar and props are not. The list is kept per hall.
+    if (this.wallsOf !== c || this.wallCount !== c.boxes.length) {
+      this.wallsOf = c;
+      this.wallCount = c.boxes.length;
+      this.walls = c.boxes.filter((b) => {
+        const w = b.maxX - b.minX;
+        const d = b.maxZ - b.minZ;
+        return Math.max(w, d) > 2.2 && Math.min(w, d) < 1.3;
+      });
+    }
+    const big = this.walls;
     const b0 = c.bounds;
     for (let d = 0.6; d <= len; d += 0.25) {
       const x = from.x + (dx / len) * d;
@@ -1888,8 +1914,13 @@ export class Game {
       this.lookPitch = THREE.MathUtils.damp(this.lookPitch, 0, 4, dt);
     }
     const yaw = this.lookYaw;
-    const cp = Math.cos(this.lookPitch);
-    const dir = this.tmp.set(Math.sin(yaw) * cp, Math.sin(this.lookPitch), Math.cos(yaw) * cp);
+    // Tilt down a little when a monster is in reach, so its feet and the warning ring
+    // under it stay in frame. Never while the player is moving the view themselves.
+    const close = this.fp.tilt && this.step === 'fight' && this.nearestEnemy(h.position, 3.5) !== null && this.time - this.lastLookInput > 0.6;
+    this.fpTilt = THREE.MathUtils.damp(this.fpTilt, close ? -0.2 : 0, 3, dt);
+    const pitch = THREE.MathUtils.clamp(this.lookPitch + this.fpTilt, -1.2, 0.95);
+    const cp = Math.cos(pitch);
+    const dir = this.tmp.set(Math.sin(yaw) * cp, Math.sin(pitch), Math.cos(yaw) * cp);
     const pos = this.camTarget.copy(h.position).setY(h.position.y + this.eyeHeight);
     pos.x += Math.sin(yaw) * 0.08;
     pos.z += Math.cos(yaw) * 0.08;
@@ -1968,8 +1999,9 @@ export class Game {
       group.add(pivot);
       return pivot;
     };
-    const right = mount(rightSrc, /Staff|staff/.test((rightSrc as THREE.Object3D | null)?.name ?? '') ? 1.15 : 0.62);
-    const left = mount(leftSrc, /Shield/.test((leftSrc as THREE.Object3D | null)?.name ?? '') ? 0.42 : 0.36);
+    const ws = this.fp.weaponScale;
+    const right = mount(rightSrc, (/Staff|staff/.test((rightSrc as THREE.Object3D | null)?.name ?? '') ? 0.8 : 0.42) * ws);
+    const left = mount(leftSrc, (/Shield/.test((leftSrc as THREE.Object3D | null)?.name ?? '') ? 0.27 : 0.25) * ws);
     this.camera.add(group);
     if (!this.camera.parent) this.scene.add(this.camera);
     this.viewmodel = { group, right, left };
@@ -1991,7 +2023,7 @@ export class Game {
     // Ease out: a fast cut, then a soft settle back.
     const cut = 1 - Math.pow(1 - s, 3);
     if (vm.right) {
-      vm.right.position.set(0.48, -0.5 + bob, -0.95);
+      vm.right.position.set(0.6, -0.6 + bob, -0.95);
       vm.right.rotation.set(-0.3, 0, -0.32);
       if (s < 1 && this.swingKind === 'swing') {
         // A big sweep across the view: from raised on one side, cutting down across to the other.
@@ -1999,8 +2031,8 @@ export class Game {
         const to = this.swingSide > 0 ? 1.3 : -0.8;
         vm.right.rotation.z = THREE.MathUtils.lerp(from, to, cut) * arc + -0.32 * (1 - arc);
         vm.right.rotation.x = -0.3 - arc * 0.9;
-        vm.right.position.x = 0.48 - arc * 0.42;
-        vm.right.position.y = -0.5 + arc * 0.18;
+        vm.right.position.x = 0.6 - arc * 0.42;
+        vm.right.position.y = -0.6 + arc * 0.18;
       } else if (s < 1) {
         // Casting: push the staff forward.
         vm.right.rotation.x = -0.3 - arc * 0.7;
@@ -2008,7 +2040,7 @@ export class Game {
       }
     }
     if (vm.left) {
-      vm.left.position.set(-0.56, -0.58 - bob + (this.hero.state === 'dash' ? 0.1 : 0), -1.0);
+      vm.left.position.set(-0.64, -0.66 - bob + (this.hero.state === 'dash' ? 0.1 : 0), -1.0);
       vm.left.rotation.set(-0.2, 0.55, 0.2);
     }
   }
@@ -2020,7 +2052,8 @@ export class Game {
     this.fpBodyHidden = hide;
     this.hero.model.traverse((o) => {
       // The weapons and arms are drawn in your hands instead (see buildViewmodel).
-      if (/(_Head|Helmet|_Hat|_Cape|_Arm|Sword|Shield|Knife|Staff|staff|Wand|Spellbook|spellbook|Crossbow)/.test(o.name)) o.visible = !hide;
+      // The body sits where the lens is and showed as dark shards; only the legs stay.
+      if (/(_Head|Helmet|_Hat|_Cape|_Arm|_Body|Sword|Shield|Knife|Staff|staff|Wand|Spellbook|spellbook|Crossbow)/.test(o.name)) o.visible = !hide;
     });
   }
 
@@ -2044,7 +2077,13 @@ export class Game {
       this.rig.occlude = null;
       this.rig.followRate = 5;
     }
-    const playFov = this.firstPerson && this.establishing <= 0 ? this.fovFor(64, 84) : behind ? this.fovFor(52, 72) : this.fovFor(30);
+    const playFov = this.firstPerson && this.establishing <= 0 ? this.fovFor(this.fp.fov, this.fp.fov + 18) : behind ? this.fovFor(52, 72) : this.fovFor(30);
+    // Close to a wall the lens must not cut through it: a short near plane in first person.
+    const near = this.firstPerson ? 0.1 : 0.5;
+    if (this.camera.near !== near) {
+      this.camera.near = near;
+      this.camera.updateProjectionMatrix();
+    }
     if (this.phase !== 'select' && this.phase !== 'title' && this.camera.fov !== playFov) {
       this.camera.fov = THREE.MathUtils.damp(this.camera.fov, playFov, 6, dt);
       if (Math.abs(this.camera.fov - playFov) < 0.05) this.camera.fov = playFov;
@@ -2070,7 +2109,7 @@ export class Game {
       // On a narrow phone only two heroes fit: follow the one being looked at.
       const pick = !title && this.camera.aspect < 1 ? this.lineup[this.chosen] : undefined;
       this.camX = THREE.MathUtils.damp(this.camX, pick ? pick.position.x * 0.85 : 0, 6, dt);
-      this.rig.update(dt, t, this.camTarget.set(this.camX, title ? 1.25 : pick ? 0.15 : this.camera.aspect < 1.6 ? 0.55 : 0.95, LINEUP_Z + 0.3));
+      this.rig.update(dt, t, this.camTarget.set(this.camX, title ? 1.25 : pick ? 0.15 : this.camera.aspect < 1.6 ? 0.55 : window.innerHeight <= 480 ? 0.35 : 0.95, LINEUP_Z + 0.3));
       return;
     } else if (this.phase === 'victory') {
       // Hero stands to the right of the panel on wide screens.
@@ -2321,6 +2360,7 @@ export class Game {
       const keyTurn = (k.key('ArrowLeft') || k.key('KeyQ') ? 1 : 0) - (k.key('ArrowRight') || k.key('KeyE') ? 1 : 0);
       this.lookYaw += keyTurn * 2.3 * this.lastDt - (k.lookDX * 0.0024 + k.dragX * 0.004) - k.look.x * 2.8 * this.lastDt;
       this.lookPitch = THREE.MathUtils.clamp(this.lookPitch - (k.lookDY * 0.0022 + k.dragY * 0.003) - k.look.y * 1.9 * this.lastDt, -1.15, 0.95);
+      if (k.lookDY || k.dragY || k.look.y) this.lastLookInput = this.time;
       if (keyTurn || k.lookDX || k.dragX || k.look.x) this.tipsShown.add('camera');
       this.rig.yaw = this.lookYaw + Math.PI;
       this.rig.axes(this.forward, this.right);
@@ -2594,6 +2634,7 @@ export class Game {
       return;
     }
     this.floatAt(hero.position, 2.3, `-${Math.round(taken)}`, 'hurt');
+    if (this.firstPerson && this.fp.markers) this.ui.hitFrom(this.relativeAngle(from));
     this.audio.play('hurt');
     this.shake(0.22);
     this.burst(hero.position.clone().setY(1.1), this.red, 14, 2.5);
@@ -3688,6 +3729,7 @@ export class Game {
     this.ui.sweepBars(frame);
 
     this.updateWaypoint();
+    this.updateThreatMarker();
     if (this.paused) return;
     if (this.brazier && !this.brazier.lit && this.introTimer <= 0) {
       // Just under the torch, so it never hides behind the goal line at the top.
@@ -3709,6 +3751,35 @@ export class Game {
   }
 
   // ───────────────────────── Helpers ─────────────────────────
+
+  /** Direction from the hero to a point, as an angle round the screen: 0 = straight ahead, clockwise. */
+  private relativeAngle(p: THREE.Vector3): number {
+    const a = Math.atan2(p.x - this.hero.position.x, p.z - this.hero.position.z) - this.lookYaw;
+    return -Math.atan2(Math.sin(a), Math.cos(a));
+  }
+
+  /** First person: a red chevron at the screen edge for a monster winding up out of view. */
+  private updateThreatMarker(): void {
+    if (!this.firstPerson || !this.fp.markers || this.paused || this.choosing) {
+      this.ui.threat(null);
+      return;
+    }
+    let best: Enemy | null = null;
+    let bestD = 9;
+    for (const e of this.enemies) {
+      if (!e.active || !(e.state === 'windup' || e.state === 'charge')) continue;
+      const d = e.position.distanceTo(this.hero.position);
+      if (d >= bestD) continue;
+      const head = this.toScreen(e.position, e.def.scale * 1.6);
+      const w = this.renderer.gl.domElement.clientWidth;
+      const h = this.renderer.gl.domElement.clientHeight;
+      const visible = head.on && head.x > 0 && head.x < w && head.y > 0 && head.y < h;
+      if (visible) continue;
+      best = e;
+      bestD = d;
+    }
+    this.ui.threat(best ? this.relativeAngle(best.position) : null);
+  }
 
   /** Takes a monster out of the scene and frees what it owned (skeleton, materials, warning ring and lane). */
   private removeEnemy(e: Enemy): void {
@@ -3775,7 +3846,8 @@ export class Game {
     this.hero = hero;
     this.fpBodyHidden = false;
     const box = new THREE.Box3().setFromObject(hero.model);
-    this.eyeHeight = Math.max(1.2, (box.max.y - box.min.y) * 0.84);
+    // Chest height, not the top of the big head: a monster in sword reach stays in frame.
+    this.eyeHeight = Math.max(1.2, (box.max.y - box.min.y) * this.fp.eye);
     this.buildViewmodel();
     this.heroColor.set(hero.def.color);
     this.heroHot.set(hero.def.hot);
@@ -3934,7 +4006,13 @@ function disposeOwned(root: THREE.Object3D): void {
       for (const m of mats) {
         if (!m || m.userData.shared) continue;
         const map = (m as THREE.MeshBasicMaterial).map;
-        if (map instanceof THREE.CanvasTexture) map.dispose();
+        if (map instanceof THREE.Texture && !map.userData.shared) map.dispose();
+        if (m instanceof THREE.ShaderMaterial) {
+          for (const u of Object.values(m.uniforms)) {
+            const v = (u as { value: unknown }).value;
+            if (v instanceof THREE.Texture && !v.userData.shared) v.dispose();
+          }
+        }
         m.dispose();
       }
     }

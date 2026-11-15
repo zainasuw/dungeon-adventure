@@ -5,6 +5,17 @@ const GRID = 4;
 const GLYPHS = GRID * GRID;
 
 /** Draws 16 rune glyphs (a stave plus branches) into one texture atlas. */
+let atlasCache: THREE.CanvasTexture | null = null;
+
+/** The glyph sheet is the same for every hall: drawn once, kept for the whole game. */
+function sharedAtlas(): THREE.CanvasTexture {
+  if (!atlasCache) {
+    atlasCache = createAtlas();
+    atlasCache.userData.shared = true;
+  }
+  return atlasCache;
+}
+
 function createAtlas(): THREE.CanvasTexture {
   const cell = 128;
   const canvas = document.createElement('canvas');
@@ -101,7 +112,7 @@ export interface RunePath {
 
 export class Runes {
   readonly paths: RunePath[] = [];
-  private readonly atlas = createAtlas();
+  private readonly atlas = sharedAtlas();
   private readonly rng = createRng(31);
   private readonly geometry: THREE.PlaneGeometry;
 

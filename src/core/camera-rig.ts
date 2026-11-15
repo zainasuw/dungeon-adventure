@@ -24,6 +24,9 @@ export class CameraRig {
     return this.pull;
   }
   private readonly wanted = new THREE.Vector3();
+  private readonly side = new THREE.Vector3();
+  private readonly from2 = new THREE.Vector3();
+  private readonly to2 = new THREE.Vector3();
   /** Keeps the view from drifting too far past the room's walls. */
   bounds = { minX: -8, maxX: 8, minZ: -8.2, maxZ: 7.5 };
 
@@ -82,13 +85,23 @@ export class CameraRig {
     const cp = Math.cos(this.pitch);
     this.offset.set(Math.sin(this.yaw) * cp, Math.sin(this.pitch), Math.cos(this.yaw) * cp).multiplyScalar(this.distance);
     if (this.occlude) {
-      // Pull in at once when a wall is in the way; ease back out slowly so it doesn't bob.
       this.wanted.copy(this.focus).add(this.offset);
-      const clear = Math.max(0.18, this.occlude(this.focus, this.wanted));
-      this.pull = clear < this.pull ? clear : damp(this.pull, clear, 2, dt);
+      // Three rays, not one: the middle and both sides of the lens, so a wall edge
+      // sliding past one corner of the view doesn't flip the whole camera in and out.
+      const len = Math.hypot(this.offset.x, this.offset.z) || 1;
+      this.side.set(-this.offset.z / len, 0, this.offset.x / len).multiplyScalar(0.35);
+      let clear = this.occlude(this.focus, this.wanted);
+      clear = Math.min(clear, this.occlude(this.from2.copy(this.focus).add(this.side), this.to2.copy(this.wanted).add(this.side)));
+      clear = Math.min(clear, this.occlude(this.from2.copy(this.focus).sub(this.side), this.to2.copy(this.wanted).sub(this.side)));
+      clear = Math.max(0.18, clear);
+      // Pull in quickly (but smoothly) when a wall is in the way; ease back out slowly.
+      // A small dead band in between, so tiny changes along a wall don't pump the camera.
+      if (clear < this.pull - 0.02) this.pull = damp(this.pull, clear, 16, dt);
+      else if (clear > this.pull + 0.06) this.pull = damp(this.pull, clear, 3, dt);
       // Squeezed by a wall: come in closer AND rise up to look down over the hero,
-      // instead of pressing against the back of their head.
-      const lift = (1 - this.pull) * this.distance * 0.6;
+      // instead of pressing against the back of their head. Capped, so a corner never
+      // turns into a view from straight above.
+      const lift = Math.min(2.4, (1 - this.pull) * this.distance * 0.6);
       this.offset.x *= this.pull;
       this.offset.z *= this.pull;
       this.offset.y += lift;

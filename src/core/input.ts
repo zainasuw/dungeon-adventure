@@ -43,6 +43,10 @@ export class Input {
   wantsPointerLock = false;
   /** Set when the browser refused the last pointer lock request (e.g. Chrome's pause after Esc). */
   lockRefused = false;
+  /** Why the last pointer lock request failed, for diagnosis (the browser's own message). */
+  lockError = '';
+  /** When the last request was made and how it ended, for diagnosis. */
+  readonly lockLog: { at: number; ok: boolean; why: string; active: boolean; focus: boolean }[] = [];
   private lookId: number | null = null;
   private lookTravel = 0;
   /** Right stick of a game controller: turns (x) and tilts (y) the camera. */
@@ -151,9 +155,14 @@ export class Input {
         if (err instanceof Error && err.name === 'NotSupportedError') return attempt();
         throw err;
       })
-      .then(() => true)
-      .catch(() => {
+      .then(() => {
+        this.lockLog.push({ at: Math.round(performance.now()), ok: true, why: '', active: !!(navigator as Navigator & { userActivation?: { isActive: boolean } }).userActivation?.isActive, focus: document.hasFocus() });
+        return true;
+      })
+      .catch((err: unknown) => {
         this.lockRefused = true;
+        this.lockError = err instanceof Error ? `${err.name}: ${err.message}` : String(err);
+        this.lockLog.push({ at: Math.round(performance.now()), ok: false, why: this.lockError, active: !!(navigator as Navigator & { userActivation?: { isActive: boolean } }).userActivation?.isActive, focus: document.hasFocus() });
         return false;
       });
   }
