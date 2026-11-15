@@ -5,6 +5,7 @@ import { Enemy, ENEMIES, type EnemyKind } from './actors/enemy';
 import { Hero, type HeroEvents, type HeroInput } from './actors/hero';
 import type { Assets } from './core/assets';
 import { CameraRig } from './core/camera-rig';
+import { dampAngle } from './core/math';
 import { Input } from './core/input';
 import { Audio } from './game/audio';
 import { clearSave, DIFFICULTIES, LEVELS, loadSave, MAX_POTIONS, writeSave, type Difficulty, type DifficultyId, type SaveData } from './game/levels';
@@ -55,7 +56,7 @@ interface Timer {
 
 const REDUCED_MOTION = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 const PLAY_VIEW = { yaw: 0, pitch: 42, distance: 18 };
-const ALTAR_REACH = 3.7;
+const ALTAR_REACH = 3.2;
 /** Where the four heroes stand on the select screen. */
 const LINEUP_X = [-3.375, -1.125, 1.125, 3.375];
 const LINEUP_Z = 2.8;
@@ -113,7 +114,10 @@ export class Game {
   private chosen = 0;
   private spin = 0;
   private lastDrag = -10;
-  private detailsOpen = false;
+  /** Seconds left of the swoop from the menu into the hall; input waits. */
+  private introTimer = 0;
+  /** Where the hero began the hall, so the pillar is only taken after the player walks to it. */
+  private readonly hallStart = new THREE.Vector3();
   private readonly lineupLight = new THREE.PointLight('#ffffff', 0, 7, 1.6);
   private lineupRing!: THREE.Mesh;
 
@@ -204,9 +208,7 @@ export class Game {
         this.spin += radians;
         this.lastDrag = this.time;
       },
-      detailsOpen: (open) => {
-        this.detailsOpen = open;
-      },
+      sound: (name) => this.audio.play(name),
       startQuest: (id, name, difficulty) => this.startQuest(id, name, difficulty),
       backToTitle: () => this.openTitle(),
       resume: () => this.setPaused(false),
@@ -243,21 +245,25 @@ export class Game {
     this.ui.showHud(false);
     this.ui.clearWorldUi();
     const save = loadSave();
-    this.setupLevel(save ? save.level : 0, false);
+    this.setupLevel(0, false);
     this.hero.root.visible = false;
-    this.showLineup(false);
+    this.chosen = -1;
+    this.showLineup(true);
     this.ui.showTitle(save);
   }
 
   private openSelect(): void {
-    this.phase = 'select';
     this.paused = false;
     this.ui.showHud(false);
     this.ui.clearWorldUi();
-    this.setupLevel(0, false);
+    // From the title the hall and heroes are already there; only rebuild after a game.
+    const fromTitle = this.phase === 'title';
+    this.phase = 'select';
+    if (!fromTitle) {
+      this.setupLevel(0, false);
+      this.showLineup(true);
+    }
     this.hero.root.visible = false;
-    this.detailsOpen = false;
-    this.showLineup(true);
     const id = this.hero.def.id;
     this.previewHero(id, false);
     this.ui.showSelect(id, this.heroName, this.difficulty.id);
@@ -293,22 +299,24 @@ export class Game {
 
   /** Eases the lineup: the chosen hero steps forward onto a glowing ring and turns slowly. */
   private updateLineup(dt: number): void {
-    if (this.phase !== 'select' || this.lineup.length === 0) return;
+    if (this.lineup.length === 0) return;
+    if (this.phase !== 'select' && this.phase !== 'title') {
+      // Leaving the menu: the heroes that weren't picked finish their cheer, then vanish.
+      for (const h of this.lineup) if (h.root.visible) h.updateVisuals(dt);
+      return;
+    }
     const tags: { id: HeroClassId; x: number; top: number; bottom: number }[] = [];
     this.lineup.forEach((h, i) => {
       const chosen = i === this.chosen;
-      // In step 2 the other heroes step back into the dark.
-      const away = this.detailsOpen && !chosen;
-      const z = LINEUP_Z + (chosen ? 0.5 : away ? -2.4 : 0);
+      const z = LINEUP_Z + (chosen ? 0.5 : 0);
       h.position.z = THREE.MathUtils.damp(h.position.z, z, 8, dt);
       const scale = chosen ? 1.06 : 1;
       h.root.scale.setScalar(THREE.MathUtils.damp(h.root.scale.x, scale, 8, dt));
-      h.root.visible = !away;
-      if (chosen && this.detailsOpen) {
-        // Step 2: turn back to face the player.
-        this.spin = THREE.MathUtils.damp(this.spin, Math.round(this.spin / (Math.PI * 2)) * Math.PI * 2, 5, dt);
-        h.facing = this.spin;
-      } else if (chosen) {
+      // On the title the heroes wave now and then, so the hall feels alive.
+      if (this.phase === 'title' && h.animator.current === 'Idle' && Math.random() < dt * 0.12) {
+        h.animator.play('Cheer', { loop: false, fade: 0.2, restart: true });
+      }
+      if (chosen) {
         if (this.time - this.lastDrag > 1.5) this.spin += dt * 0.7;
         h.facing = this.spin;
       } else {
@@ -321,6 +329,8 @@ export class Game {
       tags.push({ id: h.def.id, x: feet.x, top: head.y, bottom: feet.y });
     });
     const hero = this.lineup[this.chosen];
+    this.lineupRing.visible = this.lineupLight.visible = !!hero;
+    if (!hero) return;
     const color = new THREE.Color(hero.def.color);
     this.lineupRing.position.set(hero.position.x, 0.03, hero.position.z);
     (this.lineupRing.material as THREE.MeshBasicMaterial).color.copy(color).multiplyScalar(2);
@@ -338,43 +348,67 @@ export class Game {
   }
 
   private startQuest(id: HeroClassId, name: string, difficulty: DifficultyId): void {
-    this.showLineup(false);
     this.heroName = name;
     this.difficulty = DIFFICULTIES[difficulty];
-    if (this.hero.def.id !== id) this.setHero(id);
     this.level = 0;
     this.pillars = 0;
     this.potions = 1;
     this.kills = 0;
     this.potionsUsed = 0;
     this.playTime = 0;
-    this.enterPlay();
+    this.enterPlay(id);
   }
 
   private continueQuest(): void {
-    this.showLineup(false);
     const save = loadSave();
     if (!save) return this.openSelect();
     this.heroName = save.name;
     this.difficulty = DIFFICULTIES[save.difficulty] ?? DIFFICULTIES.normal;
-    this.setHero(save.hero);
     this.level = save.level;
     this.pillars = save.level;
     this.potions = save.potions;
     this.kills = save.kills;
     this.potionsUsed = save.potionsUsed;
     this.playTime = save.time;
-    this.enterPlay();
+    this.enterPlay(save.hero);
   }
 
-  private enterPlay(): void {
+  /**
+   * The hand-off from menu to game, with no cut: the picked hero takes over the
+   * spot where it stood in the lineup and cheers, the others vanish in sparkles,
+   * and the camera swoops up behind it into the play view.
+   */
+  private enterPlay(id: HeroClassId): void {
+    const i = HERO_ORDER.indexOf(id);
+    const stand = this.lineup[i]?.root.visible ? this.lineup[i] : null;
+    const start = stand ? stand.position.clone().setY(0) : new THREE.Vector3(0, 0, 5.4);
+    const facing = stand ? stand.facing : Math.PI;
+    this.setHero(id);
     this.ui.hideScreen();
     this.ui.setHero(this.hero.def, this.heroName, this.hero.maxHp);
-    this.ui.showHud(true);
+    this.ui.showHud(false);
     this.phase = 'play';
     this.paused = false;
-    this.setupLevel(this.level, true);
-    this.rig.snap(this.hero.position);
+    this.setupLevel(this.level, true, start, true);
+    this.hero.facing = facing;
+    this.hero.animator.play('Cheer', { loop: false, fade: 0.1, restart: true });
+    this.lineupRing.visible = this.lineupLight.visible = false;
+    this.lineup.forEach((h, j) => {
+      if (j === i || !h.root.visible) {
+        h.root.visible = false;
+        return;
+      }
+      h.animator.play('Cheer', { loop: false, fade: 0.1, restart: true });
+      this.later(0.35 + Math.abs(j - i) * 0.12, () => {
+        h.root.visible = false;
+        this.burst(h.position.clone().setY(1), this.gold, 40, 3.5);
+        this.puff(h.position, 8);
+      });
+    });
+    this.burst(start.clone().setY(1.1), this.heroColor, 60, 4.5);
+    this.audio.play('start');
+    this.introTimer = 1.6;
+    this.later(1.6, () => this.ui.showHud(true));
     this.saveProgress();
   }
 
@@ -429,7 +463,7 @@ export class Game {
   // ───────────────────────── Halls ─────────────────────────
 
   /** Builds hall `index`. With `live`, the hero is placed and the hall begins. */
-  private setupLevel(index: number, live: boolean): void {
+  private setupLevel(index: number, live: boolean, start?: THREE.Vector3, intro = false): void {
     const level = LEVELS[index];
     this.level = index;
     this.clearActors();
@@ -455,7 +489,9 @@ export class Game {
     this.hero.revive();
     this.hero.invulnerable = 0;
     this.hero.root.visible = true;
-    this.hero.position.set(0, 0, 5.4);
+    if (start) this.hero.position.copy(start);
+    else this.hero.position.set(0, 0, 5.4);
+    this.hallStart.copy(this.hero.position);
     this.hero.facing = Math.PI;
     this.hero.velocity.set(0, 0, 0);
     this.hero.animator.play('Idle', { fade: 0 });
@@ -463,8 +499,11 @@ export class Game {
     this.rig.setView(PLAY_VIEW.yaw, PLAY_VIEW.pitch, PLAY_VIEW.distance);
     this.ui.setQuest(index, this.pillars);
     this.ui.objective('Follow the golden arrow to the altar');
-    this.later(2.6, () => this.tip('walk', 'Walk with <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> or the arrow keys'));
-    this.ui.banner(`Hall ${index + 1} of 4`, level.hall, `Guarding the Pillar of ${level.pillar}`);
+    const delay = intro ? 1.1 : 0;
+    this.later(delay + 2.6, () => this.tip('walk', 'Walk with <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> or the arrow keys'));
+    const banner = () => this.ui.banner(`Hall ${index + 1} of 4`, level.hall, `Guarding the Pillar of ${level.pillar}`);
+    if (intro) this.later(delay, banner);
+    else banner();
     this.ui.fade(false);
   }
 
@@ -507,7 +546,7 @@ export class Game {
     this.shake(0.35);
     this.audio.play('pillar');
     this.ui.objective('The skeletons are waking up! Defeat them all');
-    this.later(1.2, () => this.tip('attack', '<kbd>Click</kbd> to attack. Hold it to keep swinging. Your hero aims for you!', 6));
+    this.later(1.2, () => this.tip('attack', 'Press <kbd>F</kbd> to attack. Hold it to keep swinging. Your hero aims for you!', 6));
     this.enemies.forEach((e, i) => {
       if (e.state !== 'dormant') return;
       this.later(0.35 + i * 0.35, () => {
@@ -647,30 +686,20 @@ export class Game {
   }
 
   private updateCamera(dt: number, t: number): void {
-    if (this.phase !== 'select' && this.camera.fov !== 30) {
+    if (this.phase !== 'select' && this.phase !== 'title' && this.camera.fov !== 30) {
       this.camera.fov = THREE.MathUtils.damp(this.camera.fov, 30, 6, dt);
       if (Math.abs(this.camera.fov - 30) < 0.05) this.camera.fov = 30;
       this.camera.updateProjectionMatrix();
     }
-    if (this.phase === 'title') {
-      this.rig.setView(30 + t * 3, 34, 22);
-      this.rig.update(dt, t, this.camTarget.set(0, 0.5, 0));
-    } else if (this.phase === 'select') {
-      // Wide lens on the row of heroes; in step 2, close in on the chosen one.
-      const h = this.lineup[this.chosen];
-      const fov = this.detailsOpen ? 32 : 36;
-      if (Math.abs(this.camera.fov - fov) > 0.01) {
-        this.camera.fov = THREE.MathUtils.damp(this.camera.fov, fov, 5, dt);
+    if (this.phase === 'select' || this.phase === 'title') {
+      // A wide lens on the row of heroes, swaying gently on the title.
+      if (Math.abs(this.camera.fov - 36) > 0.01) {
+        this.camera.fov = THREE.MathUtils.damp(this.camera.fov, 36, 5, dt);
         this.camera.updateProjectionMatrix();
       }
-      if (this.detailsOpen && h) {
-        const wide = window.innerWidth > 900;
-        this.rig.setView(0, 9, 8.2);
-        this.rig.update(dt, t, this.camTarget.set(h.position.x - (wide ? 1.9 : 0), 1.05, h.position.z));
-      } else {
-        this.rig.setView(0, 8, 8.6);
-        this.rig.update(dt, t, this.camTarget.set(0, 0.95, LINEUP_Z + 0.3));
-      }
+      const title = this.phase === 'title';
+      this.rig.setView(title ? Math.sin(t * 0.25) * 4 : 0, title ? 10 : 8, title ? 9.8 : 8.6);
+      this.rig.update(dt, t, this.camTarget.set(0, title ? 1.25 : 0.95, LINEUP_Z + 0.3));
       return;
     } else if (this.phase === 'victory') {
       // Hero stands to the right of the panel on wide screens.
@@ -684,8 +713,17 @@ export class Game {
   }
 
   private updatePlay(dt: number): void {
-    this.playTime += dt;
     this.runTimers(dt);
+    if (this.introTimer > 0) {
+      // The swoop: the hero cheers, then turns to face the hall. Input waits.
+      this.introTimer -= dt;
+      const hero = this.hero;
+      if (this.introTimer < 1.0) hero.facing = dampAngle(hero.facing, Math.PI, 4, dt);
+      if (hero.animator.current === 'Cheer' && hero.animator.progress >= 1) hero.animator.play('Idle', { fade: 0.2 });
+      this.input.endFrame();
+      return;
+    }
+    this.playTime += dt;
 
     if (this.input.keyPressed('Escape') || this.input.keyPressed('KeyP')) {
       this.setPaused(true);
@@ -713,7 +751,8 @@ export class Game {
 
     // The hall's steps.
     const altarDist = hero.position.distanceTo(this.crypt.altar.position);
-    if (this.step === 'explore' && altarDist < ALTAR_REACH && hero.state === 'free') {
+    const walked = hero.position.distanceTo(this.hallStart) > 0.4;
+    if (this.step === 'explore' && altarDist < ALTAR_REACH && walked && hero.state === 'free') {
       this.step = 'claiming';
       hero.interact();
       this.crypt.altar.setCharge(1);
@@ -749,7 +788,7 @@ export class Game {
         this.tip('dodge', 'Red ring = a skeleton is about to hit. Press <kbd>Space</kbd> to dodge!');
       }
       if (hero.hp < hero.maxHp * 0.6 && this.potions > 0) this.tip('potion', 'Hurt? Press <kbd>H</kbd> to drink a potion');
-      if (this.kills >= 2) this.tip('special', 'Try your special move: <kbd>R-Click</kbd>');
+      if (this.kills >= 2) this.tip('special', 'Try your special move: <kbd>G</kbd>');
     }
 
     if (!hero.alive) this.lose();
@@ -796,7 +835,9 @@ export class Game {
       const dir = move.lengthSq() > 0.01 ? move : new THREE.Vector3(Math.sin(this.hero.facing), 0, Math.cos(this.hero.facing));
       this.heroInput.aim.copy(this.hero.position).add(dir);
     }
-    this.heroInput.attack = k.buttonPressed(0) || k.keyPressed('KeyJ') || k.keyPressed('KeyF') || (k.button(0) && this.hero.state === 'free');
+    // F (or J, or a click) attacks; holding keeps swinging.
+    const holding = k.button(0) || k.key('KeyF') || k.key('KeyJ');
+    this.heroInput.attack = k.buttonPressed(0) || k.keyPressed('KeyF') || k.keyPressed('KeyJ') || (holding && this.hero.state === 'free');
     this.heroInput.secondary = k.buttonPressed(2) || k.keyPressed('KeyK') || k.keyPressed('KeyG');
     this.heroInput.dodge = k.keyPressed('Space') || k.keyPressed('ShiftLeft');
     this.heroInput.special = k.keyPressed('KeyQ');

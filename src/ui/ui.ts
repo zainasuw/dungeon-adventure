@@ -11,8 +11,8 @@ export interface UiHandlers {
   previewHero(id: HeroClassId): void;
   /** Spins the chosen hero on the select screen by a number of radians. */
   spinHero(radians: number): void;
-  /** Step 2 opened or closed: the 3D lineup steps aside or comes back. */
-  detailsOpen(open: boolean): void;
+  /** Menu sounds: a soft tick on hover, a click on press. */
+  sound(name: 'tick' | 'click'): void;
   startQuest(hero: HeroClassId, name: string, difficulty: DifficultyId): void;
   backToTitle(): void;
   resume(): void;
@@ -35,7 +35,7 @@ export interface QuestStats {
 
 export type FloatKind = 'damage' | 'crit' | 'hurt' | 'heal' | 'info' | 'block';
 
-const KEY_LABEL: Record<SlotKey, string> = { LMB: 'Click', RMB: 'R-Click', SPACE: 'Space', Q: 'Q' };
+const KEY_LABEL: Record<SlotKey, string> = { LMB: 'F', RMB: 'G', SPACE: 'Space', Q: 'Q' };
 
 // Two small drawings of our own for things the icon set lacks.
 const POTION_PATH =
@@ -118,28 +118,39 @@ export class Ui {
     this.bannerEl.setAttribute('aria-live', 'polite');
     root.append(this.lowHp, this.bars, this.floaters, this.promptEl, this.hud, this.hintEl, this.bannerEl, this.screen, this.fadeEl);
     window.addEventListener('keydown', this.onKey);
+    // Menu sounds: a soft tick when the pointer reaches a button, a click when pressed.
+    let hovered: Element | null = null;
+    root.addEventListener('pointerover', (e) => {
+      const b = (e.target as HTMLElement).closest('button');
+      if (b && b !== hovered) this.handlers.sound('tick');
+      hovered = b;
+    });
+    root.addEventListener('pointerdown', (e) => {
+      if ((e.target as HTMLElement).closest('button')) this.handlers.sound('click');
+    });
   }
 
   // ───────────────────────── Screens ─────────────────────────
 
+  /** The title sits over the real hall with the four heroes already standing in it. */
   showTitle(save: SaveData | null): void {
     const cont = save
-      ? `<button class="btn btn--primary" data-act="continue">
+      ? `<button class="btn btn--primary btn--big" data-act="continue">
            <span>Continue</span>
            <small>${save.name ? `${escapeHtml(save.name)} the ` : ''}${HERO_CLASSES[save.hero].name} · Hall ${save.level + 1} of 4</small>
          </button>`
       : '';
     this.setScreen(
       'title',
-      `<div class="title">
-        <p class="kicker">A 3D dungeon crawler</p>
-        <h1 class="title__name">Dungeon<br/>Adventure</h1>
-        <p class="title__tag">Wake the four pillars. Defeat the skeletons.<br/>Escape through the golden door.</p>
-        <div class="title__actions">
-          ${cont}
-          <button class="btn ${save ? '' : 'btn--primary'}" data-act="new">${save ? 'New quest' : 'Start a quest'}</button>
-          <button class="btn btn--ghost" data-act="howto">How to play</button>
-        </div>
+      `<header class="title2">
+        <p class="kicker">A 3D dungeon adventure</p>
+        <h1 class="title2__name">Dungeon Adventure</h1>
+        <p class="title2__tag">Wake the four pillars. Beat the skeletons. Escape!</p>
+      </header>
+      <div class="title2__actions">
+        ${cont}
+        <button class="btn ${save ? 'btn--big-alt' : 'btn--primary btn--big'}" data-act="new">${save ? 'New game' : 'Play'}</button>
+        <button class="link-btn" data-act="howto">How to play</button>
       </div>
       <p class="credits">3D art: KayKit by Kay Lousberg (CC0) · Icons: game-icons.net (CC BY 3.0)</p>`,
     );
@@ -149,7 +160,7 @@ export class Ui {
     this.focusFirst();
   }
 
-  /** Step 1: the four heroes stand in a row in 3D; pick one. */
+  /** Same hall, same heroes: pick one and press Start. */
   showSelect(hero: HeroClassId, name: string, difficulty: DifficultyId): void {
     this.selectState = { hero, name, difficulty };
     const tags = HERO_ORDER.map((id) => {
@@ -159,79 +170,45 @@ export class Ui {
         <span class="hero-pick__tag">${c.name}</span>
       </button>`;
     }).join('');
+    const diffs = (Object.keys(DIFFICULTIES) as DifficultyId[])
+      .map((id) => `<button type="button" class="seg__btn" role="radio" data-diff="${id}">${DIFFICULTIES[id].label}</button>`)
+      .join('');
     this.setScreen(
       'select',
       `<button type="button" class="link-btn pick-back" data-act="back">‹ Back</button>
       <header class="pick-head">
-        <p class="kicker">Step 1 of 2</p>
         <h2 class="pick-title">Choose your hero</h2>
-        <p class="pick-help">Click a hero, or use the arrows. Drag to spin them around.</p>
+        <p class="pick-help">Click a hero or use <kbd>←</kbd> <kbd>→</kbd>. Drag to spin them.</p>
       </header>
       <div class="hero-row" role="radiogroup" aria-label="Heroes">${tags}</div>
       <button type="button" class="nav-arrow nav-arrow--prev" data-act="prev" aria-label="Previous hero">${icon('M336 64L144 256l192 192', 'icon icon--stroke')}</button>
       <button type="button" class="nav-arrow nav-arrow--next" data-act="next" aria-label="Next hero">${icon('M176 64l192 192-192 192', 'icon icon--stroke')}</button>
-      <section class="pick-card" aria-live="polite"></section>`,
+      <section class="pick-card">
+        <div class="pick-card__info" aria-live="polite"></div>
+        <div class="pick-card__start">
+          <div class="seg seg--small" role="radiogroup" aria-label="Difficulty">${diffs}</div>
+          <p class="pick-card__hint" data-diff-hint></p>
+          <button type="button" class="btn btn--primary btn--big pick-card__go" data-act="start"></button>
+        </div>
+      </section>`,
     );
     this.screen.querySelectorAll<HTMLButtonElement>('[data-hero]').forEach((b) =>
       b.addEventListener('click', () => this.pickHero(b.dataset.hero as HeroClassId)),
     );
-    this.on('back', () => this.handlers.backToTitle());
-    this.on('prev', () => this.stepHero(-1));
-    this.on('next', () => this.stepHero(1));
-    this.enableDrag();
-    this.pickHero(hero, false);
-    this.screen.querySelector<HTMLElement>('[data-act="choose"]')?.focus({ preventScroll: true });
-  }
-
-  /** Step 2: name and difficulty, with the chosen hero still on screen. */
-  private showDetails(): void {
-    const s = this.selectState;
-    const c = HERO_CLASSES[s.hero];
-    const diffs = (Object.keys(DIFFICULTIES) as DifficultyId[])
-      .map(
-        (id) => `<button type="button" class="diff" role="radio" data-diff="${id}">
-          <b>${DIFFICULTIES[id].label}</b><span>${DIFFICULTIES[id].hint}</span>
-        </button>`,
-      )
-      .join('');
-    this.setScreen(
-      'details',
-      `<form class="details card" novalidate style="--hero:${c.color}">
-        <p class="kicker">Step 2 of 2</p>
-        <h2 class="card__title">Ready, ${c.name}?</h2>
-        <label class="field">
-          <span class="field__label">Your hero's name <small>(you can skip this)</small></span>
-          <input class="field__input" name="hero-name" maxlength="16" autocomplete="off" spellcheck="false" placeholder="${c.name}" />
-        </label>
-        <div class="field">
-          <span class="field__label" id="diff-label">How hard?</span>
-          <div class="diffs" role="radiogroup" aria-labelledby="diff-label">${diffs}</div>
-        </div>
-        <div class="stack stack--row">
-          <button type="button" class="btn btn--ghost" data-act="back">‹ Pick another hero</button>
-          <button type="submit" class="btn btn--primary">Start the adventure</button>
-        </div>
-      </form>`,
-    );
-    this.screen.style.setProperty('--hero', c.color);
-    const form = this.screen.querySelector('form')!;
-    const input = form.querySelector<HTMLInputElement>('.field__input')!;
-    input.value = s.name;
-    input.addEventListener('input', () => (this.selectState.name = input.value));
     this.screen.querySelectorAll<HTMLButtonElement>('[data-diff]').forEach((b) =>
       b.addEventListener('click', () => this.pickDifficulty(b.dataset.diff as DifficultyId)),
     );
-    this.on('back', () => {
-      this.handlers.detailsOpen(false);
-      this.showSelect(s.hero, s.name, s.difficulty);
+    this.on('back', () => this.handlers.backToTitle());
+    this.on('prev', () => this.stepHero(-1));
+    this.on('next', () => this.stepHero(1));
+    this.on('start', () => {
+      const st = this.selectState;
+      this.handlers.startQuest(st.hero, st.name.trim(), st.difficulty);
     });
-    form.addEventListener('submit', (e) => {
-      e.preventDefault();
-      this.handlers.startQuest(s.hero, s.name.trim(), s.difficulty);
-    });
-    this.pickDifficulty(s.difficulty);
-    this.handlers.detailsOpen(true);
-    input.focus({ preventScroll: true });
+    this.enableDrag();
+    this.pickHero(hero, false);
+    this.pickDifficulty(difficulty);
+    this.screen.querySelector<HTMLElement>('[data-act="start"]')?.focus({ preventScroll: true });
   }
 
   /** Pins each hero's name tag and click area to where the 3D hero stands. */
@@ -264,8 +241,8 @@ export class Ui {
         <p class="howto__goal">Collect all <b>4 pillars</b> to escape and win.</p>
         <div class="keys">
           ${key('W A S D', 'Walk (arrow keys work too)')}
-          ${key('Click', 'Attack (it aims for you)')}
-          ${key('R-Click', 'Special move')}
+          ${key('F', 'Attack, or click (it aims for you)')}
+          ${key('G', 'Special move, or right-click')}
           ${key('Space', 'Dodge')}
           ${key('Q', 'Hero power')}
           ${key('H', 'Drink a potion')}
@@ -588,21 +565,19 @@ export class Ui {
       const v = Math.max(1, Math.min(5, value));
       return `<div class="stat-bar" aria-label="${label}: ${v} out of 5"><span>${label}</span><span class="stat-bar__track"><span style="width:${v * 20}%"></span></span></div>`;
     };
-    const card = this.screen.querySelector('.pick-card');
+    const card = this.screen.querySelector('.pick-card__info');
     if (!card) return;
     card.innerHTML = `
-      <div class="pick-card__text">
-        <h3 class="pick-card__name">${c.name}</h3>
-        <p class="pick-card__blurb">${c.blurb}</p>
-        <p class="pick-card__power"><b>Special:</b> ${c.passive.name}. ${c.passive.text}</p>
-      </div>
+      <h3 class="pick-card__name">${c.name}</h3>
+      <p class="pick-card__blurb">${c.blurb}</p>
       <div class="pick-card__stats">
         ${bar('Health', Math.round(c.maxHp / 30))}
         ${bar('Power', c.stats.power)}
         ${bar('Speed', c.stats.agility)}
       </div>
-      <button type="button" class="btn btn--primary pick-card__go" data-act="choose">Play as ${c.name} <span aria-hidden="true">›</span></button>`;
-    this.on('choose', () => this.showDetails());
+      <p class="pick-card__power"><b>Special:</b> ${c.passive.name}. ${c.passive.text}</p>`;
+    const go = this.screen.querySelector('[data-act="start"]');
+    if (go) go.innerHTML = `Start as ${c.name} <kbd>Enter</kbd>`;
     if (preview) this.handlers.previewHero(id);
   }
 
@@ -638,6 +613,8 @@ export class Ui {
       b.setAttribute('aria-checked', String(on));
       b.tabIndex = on ? 0 : -1;
     });
+    const hint = this.screen.querySelector('[data-diff-hint]');
+    if (hint) hint.textContent = DIFFICULTIES[id].hint;
   }
 
   private setScreen(name: string, html: string): void {
@@ -674,25 +651,16 @@ export class Ui {
       } else if (name === 'select') {
         e.preventDefault();
         this.handlers.backToTitle();
-      } else if (name === 'details') {
-        e.preventDefault();
-        const st = this.selectState;
-        this.handlers.detailsOpen(false);
-        this.showSelect(st.hero, st.name, st.difficulty);
       }
       return;
     }
     if (name === 'select' && (e.key === 'ArrowRight' || e.key === 'ArrowLeft')) {
       e.preventDefault();
       this.stepHero(e.key === 'ArrowRight' ? 1 : -1);
-      this.screen.querySelector<HTMLElement>('[data-act="choose"]')?.focus({ preventScroll: true });
-    } else if (name === 'details' && (e.target as HTMLElement).closest?.('.diffs') && /^Arrow/.test(e.key)) {
+      this.screen.querySelector<HTMLElement>('[data-act="start"]')?.focus({ preventScroll: true });
+    } else if (name === 'title' && e.key === 'Enter' && !(e.target instanceof HTMLButtonElement)) {
       e.preventDefault();
-      const ids = Object.keys(DIFFICULTIES) as DifficultyId[];
-      const i = ids.indexOf(this.selectState.difficulty);
-      const next = ids[(i + (e.key === 'ArrowRight' || e.key === 'ArrowDown' ? 1 : ids.length - 1)) % ids.length];
-      this.pickDifficulty(next);
-      this.screen.querySelector<HTMLElement>(`[data-diff="${next}"]`)?.focus();
+      this.screen.querySelector<HTMLElement>('.btn--primary')?.click();
     }
   };
 }

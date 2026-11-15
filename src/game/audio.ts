@@ -18,7 +18,9 @@ export type Sfx =
   | 'clear'
   | 'victory'
   | 'defeat'
-  | 'click';
+  | 'click'
+  | 'tick'
+  | 'start';
 
 export class Audio {
   muted = false;
@@ -26,11 +28,12 @@ export class Audio {
   private master: GainNode | null = null;
   private noise: AudioBuffer | null = null;
   private last = new Map<Sfx, number>();
+  private musicOn = false;
 
   constructor() {
     const unlock = (): void => {
       this.ensure();
-      void this.ctx?.resume();
+      void this.ctx?.resume().then(() => this.startMusic());
     };
     window.addEventListener('pointerdown', unlock);
     window.addEventListener('keydown', unlock);
@@ -39,6 +42,60 @@ export class Audio {
   setMuted(muted: boolean): void {
     this.muted = muted;
     if (this.master) this.master.gain.value = muted ? 0 : 0.5;
+  }
+
+  /**
+   * Quiet ambient music: a slow, filtered pad on a minor chord with a bell note
+   * now and then. Starts once the browser allows sound.
+   */
+  private startMusic(): void {
+    const ctx = this.ctx;
+    if (!ctx || this.musicOn) return;
+    this.musicOn = true;
+    const bus = ctx.createGain();
+    bus.gain.setValueAtTime(0.0001, ctx.currentTime);
+    bus.gain.exponentialRampToValueAtTime(0.11, ctx.currentTime + 4);
+    const filter = ctx.createBiquadFilter();
+    filter.type = 'lowpass';
+    filter.frequency.value = 700;
+    filter.Q.value = 0.7;
+    const lfo = ctx.createOscillator();
+    const lfoGain = ctx.createGain();
+    lfo.frequency.value = 0.07;
+    lfoGain.gain.value = 260;
+    lfo.connect(lfoGain).connect(filter.frequency);
+    lfo.start();
+    filter.connect(bus).connect(this.master!);
+    for (const [f, detune] of [[110, -6], [110, 6], [164.81, 0], [220, -4], [261.63, 5]]) {
+      const o = ctx.createOscillator();
+      o.type = 'sawtooth';
+      o.frequency.value = f;
+      o.detune.value = detune;
+      const g = ctx.createGain();
+      g.gain.value = 0.12;
+      o.connect(g).connect(filter);
+      o.start();
+    }
+    // Sparse bells from an A-minor pentatonic scale.
+    const notes = [440, 523.25, 587.33, 659.25, 783.99, 880];
+    const bell = (): void => {
+      if (!this.muted && ctx.state === 'running') {
+        const at = ctx.currentTime;
+        const f = notes[Math.floor(Math.random() * notes.length)];
+        const o = ctx.createOscillator();
+        o.type = 'sine';
+        o.frequency.value = f;
+        const g = ctx.createGain();
+        g.gain.setValueAtTime(0.0001, at);
+        g.gain.exponentialRampToValueAtTime(0.035, at + 0.02);
+        g.gain.exponentialRampToValueAtTime(0.0001, at + 2.8);
+        o.connect(g).connect(this.master!);
+        o.start(at);
+        o.stop(at + 3);
+      }
+      window.setTimeout(bell, 2200 + Math.random() * 3800);
+    };
+    window.setTimeout(bell, 1500);
   }
 
   play(name: Sfx): void {
@@ -87,7 +144,14 @@ export class Audio {
       case 'defeat':
         return this.arp(now, [392, 330, 262, 196], 0.22, 0.13, 0.9);
       case 'click':
-        return this.tone(now, [700, 900], 0.05, 'sine', 0.06);
+        this.tone(now, [520, 780], 0.07, 'triangle', 0.09);
+        return this.click(now, 2400);
+      case 'tick':
+        return this.tone(now, [1500 + Math.random() * 200, 1600], 0.03, 'sine', 0.025);
+      case 'start':
+        this.whoosh(now, 0.9, 300, 3200, 0.22);
+        this.arp(now + 0.05, [392, 523, 659, 784, 1047], 0.08, 0.13, 0.9);
+        return this.thud(now + 0.5, 90, 0.5, 0.35);
     }
   }
 
