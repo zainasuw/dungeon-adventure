@@ -131,6 +131,10 @@ export class Enemy extends Character {
   deadTime = 0;
   /** 0..1 while winding up a blow; drives the red warning ring. */
   telegraph = 0;
+  /** Fire Blade: seconds left burning, and damage per second. */
+  burn = 0;
+  burnDps = 0;
+  burnTick = 0;
   /** A tougher, glowing champion: bigger, more health, always drops a reward. */
   elite = false;
   /** Which way it slides around obstacles: 1 or -1. */

@@ -1,6 +1,7 @@
 import { HERO_CLASSES, type HeroClass, type HeroClassId, type SlotKey } from '../actors/classes';
 import { DIFFICULTIES, LEVELS, MAX_POTIONS, type DifficultyId, type SaveData } from '../game/levels';
 import { ICONS, type IconName } from './icons';
+import type { Blessing, BlessingLevels } from '../game/blessings';
 
 /** Hero order on the select screen, as in the original game. */
 export const HERO_ORDER: HeroClassId[] = ['warrior', 'priestess', 'thief', 'doctor'];
@@ -86,6 +87,7 @@ export class Ui {
   private selectState = { hero: 'warrior' as HeroClassId, name: '', difficulty: 'easy' as DifficultyId };
   private overlayReturn: (() => void) | null = null;
   private muted = false;
+  private blessPick: ((i: number) => void) | null = null;
 
   // HUD parts, filled by setHero.
   private hpFill!: HTMLElement;
@@ -336,6 +338,56 @@ export class Ui {
     this.focusFirst();
   }
 
+  /** After a hall: three blessing cards, pick one (click, 1/2/3, or arrows and Enter). */
+  showBlessings(options: Blessing[], owned: BlessingLevels, onPick: (b: Blessing) => void): void {
+    const cards = options
+      .map((b, i) => {
+        const lvl = owned[b.id] ?? 0;
+        const pips = Array.from({ length: b.max }, (_, k) => `<i class="${k < lvl ? 'on' : k === lvl ? 'next' : ''}"></i>`).join('');
+        const art = b.icon === 'potion' ? icon(POTION_PATH, 'icon', 'evenodd') : iconByName(b.icon);
+        return `<button type="button" class="bless" data-i="${i}" style="--c:${b.color}">
+          <span class="bless__key">${i + 1}</span>
+          <span class="bless__art">${art}</span>
+          <b class="bless__name">${b.name}</b>
+          <span class="bless__text">${b.text}</span>
+          <span class="bless__lvl">${lvl ? `Level ${lvl + 1}` : 'New!'}<span class="bless__pips">${pips}</span></span>
+        </button>`;
+      })
+      .join('');
+    this.setScreen(
+      'bless',
+      `<div class="bless-wrap" role="dialog" aria-modal="true" aria-labelledby="bless-title">
+        <p class="kicker">The pillar blesses you</p>
+        <h2 id="bless-title" class="card__title card__title--big">Choose a blessing</h2>
+        <div class="bless-row">${cards}</div>
+        <p class="bless-help">Click one, or press <kbd>1</kbd> <kbd>2</kbd> <kbd>3</kbd></p>
+      </div>`,
+    );
+    const pick = (i: number): void => {
+      const b = options[i];
+      if (!b) return;
+      this.blessPick = null;
+      onPick(b);
+    };
+    this.blessPick = pick;
+    this.screen.querySelectorAll<HTMLButtonElement>('.bless').forEach((el) => el.addEventListener('click', () => pick(Number(el.dataset.i))));
+    this.focusFirst('.bless');
+  }
+
+  /** Small icons under the hero plate for the blessings you have. */
+  setBlessings(owned: BlessingLevels, all: Record<string, Blessing>): void {
+    const row = this.hud.querySelector('.plate__blessings');
+    if (!row) return;
+    row.innerHTML = Object.entries(owned)
+      .filter(([, lvl]) => (lvl ?? 0) > 0)
+      .map(([id, lvl]) => {
+        const b = all[id];
+        const art = b.icon === 'potion' ? icon(POTION_PATH, 'icon', 'evenodd') : iconByName(b.icon);
+        return `<span class="mini-bless" style="--c:${b.color}" title="${b.name} (level ${lvl}): ${b.text}">${art}${(lvl ?? 0) > 1 ? `<small>${lvl}</small>` : ''}</span>`;
+      })
+      .join('');
+  }
+
   hideScreen(): void {
     delete this.screen.dataset.screen;
     this.screen.className = 'screen-layer';
@@ -406,6 +458,7 @@ export class Ui {
             <span class="bar__lag"></span><span class="bar__fill"></span><span class="bar__text"></span>
           </div>
           <div class="bar bar--res" aria-hidden="true"><span class="bar__fill"></span></div>
+          <div class="plate__blessings"></div>
           <p class="plate__passive">${iconByName('holySymbol', 'icon icon--tiny')} ${def.passive.name}: ${def.passive.text}</p>
         </div>
       </div>
@@ -460,7 +513,7 @@ export class Ui {
     this.objectiveEl.classList.add('quest__objective--new');
   }
 
-  updateHud(hp: number, maxHp: number, resource: number, potions: number, cooldowns: number[], cooldownLeft: number[]): void {
+  updateHud(hp: number, maxHp: number, resource: number, potions: number, cooldowns: number[], cooldownLeft: number[], maxPotions = MAX_POTIONS): void {
     if (this.shownHp < 0) this.lagHp = hp;
     if (hp !== this.shownHp) {
       this.shownHp = hp;
@@ -472,7 +525,7 @@ export class Ui {
     this.lagHp = this.lagHp > hp ? Math.max(hp, this.lagHp - maxHp * 0.012) : hp;
     this.hpLag.style.transform = `scaleX(${this.lagHp / maxHp})`;
     this.resFill.style.transform = `scaleX(${resource / 100})`;
-    this.potionCount.textContent = `${potions}/${MAX_POTIONS}`;
+    this.potionCount.textContent = `${potions}/${maxPotions}`;
     this.potionSlot.classList.toggle('slot--empty', potions === 0);
     this.slots.forEach((s, i) => {
       const f = cooldowns[i];
@@ -647,6 +700,11 @@ export class Ui {
   private onKey = (e: KeyboardEvent): void => {
     const name = this.screenName;
     if (e.target instanceof HTMLInputElement && e.key !== 'Escape') return;
+    if (name === 'bless' && this.blessPick && /^[123]$/.test(e.key)) {
+      e.preventDefault();
+      this.blessPick(Number(e.key) - 1);
+      return;
+    }
     if (e.key === 'Escape') {
       if (name === 'howto') {
         e.preventDefault();

@@ -8,6 +8,7 @@ import { CameraRig } from './core/camera-rig';
 import { dampAngle } from './core/math';
 import { Input } from './core/input';
 import { Audio } from './game/audio';
+import { BLESSINGS, rollBlessings, type Blessing, type BlessingLevels } from './game/blessings';
 import { clearSave, DIFFICULTIES, LEVELS, loadSave, MAX_POTIONS, writeSave, type Difficulty, type DifficultyId, type SaveData } from './game/levels';
 import { MOODS, type Mood } from './render/moods';
 import { Renderer } from './render/renderer';
@@ -106,6 +107,10 @@ export class Game {
   private zones: Zone[] = [];
   private pickups: Potion[] = [];
   private crates: Crate[] = [];
+  /** Blessings chosen this quest, by level. */
+  private blessings: BlessingLevels = {};
+  /** True while the blessing cards are up; the game waits. */
+  private choosing = false;
   private timers: Timer[] = [];
   private renew = { left: 0, rate: 0 };
   private hitStop = 0;
@@ -142,6 +147,7 @@ export class Game {
   private readonly heroHot = new THREE.Color();
   private readonly white = new THREE.Color('#ffffff');
   private readonly woodColor = new THREE.Color('#a0703f');
+  private readonly fireColor = new THREE.Color('#ff8a2a');
   private heartTexture: THREE.Texture | null = null;
   private readonly gold = new THREE.Color('#ffc35a');
   private readonly red = new THREE.Color('#ff4040');
@@ -379,6 +385,7 @@ export class Game {
   }
 
   private startQuest(id: HeroClassId, name: string, difficulty: DifficultyId): void {
+    this.blessings = {};
     this.heroName = name;
     this.difficulty = DIFFICULTIES[difficulty];
     this.level = 0;
@@ -401,6 +408,7 @@ export class Game {
     this.kills = save.kills;
     this.potionsUsed = save.potionsUsed;
     this.playTime = save.time;
+    this.blessings = (save.blessings ?? {}) as BlessingLevels;
     this.enterPlay(save.hero);
   }
 
@@ -415,8 +423,10 @@ export class Game {
     const start = stand ? stand.position.clone().setY(0) : new THREE.Vector3(0, 0, 5.4);
     const facing = stand ? stand.facing : Math.PI;
     this.setHero(id);
+    this.applyBlessings();
     this.ui.hideScreen();
     this.ui.setHero(this.hero.def, this.heroName, this.hero.maxHp);
+    this.ui.setBlessings(this.blessings, BLESSINGS);
     this.ui.showHud(false);
     this.phase = 'play';
     this.paused = false;
@@ -445,8 +455,10 @@ export class Game {
 
   private restartLevel(): void {
     this.potions = Math.max(this.levelStartPotions, 1);
+    this.choosing = false;
     this.ui.hideScreen();
     this.ui.setHero(this.hero.def, this.heroName, this.hero.maxHp);
+    this.ui.setBlessings(this.blessings, BLESSINGS);
     this.ui.showHud(true);
     this.phase = 'play';
     this.paused = false;
@@ -454,7 +466,7 @@ export class Game {
   }
 
   private setPaused(paused: boolean): void {
-    if (this.phase !== 'play') return;
+    if (this.phase !== 'play' || this.choosing) return;
     this.paused = paused;
     this.input.endFrame();
     if (paused) {
@@ -475,6 +487,7 @@ export class Game {
       kills: this.kills,
       potionsUsed: this.potionsUsed,
       time: this.playTime,
+      blessings: this.blessings,
     } satisfies SaveData);
   }
 
@@ -647,6 +660,7 @@ export class Game {
       this.burst(new THREE.Vector3(1.8, 1, 3), this.heal, 30, 3);
     });
     this.ui.objective(last ? 'The way out is open! Follow the arrow to the golden door' : 'Follow the arrow to the golden door');
+    if (!last) this.later(2.9, () => this.offerBlessings());
     if (this.hero.state === 'free') this.hero.animator.play('Cheer', { loop: false, fade: 0.15, restart: true });
   }
 
@@ -660,7 +674,7 @@ export class Game {
     }
     this.later(0.8, () => {
       this.level += 1;
-      this.potions = Math.min(MAX_POTIONS, this.potions);
+      this.potions = Math.min(this.maxPotions, this.potions);
       this.setupLevel(this.level, true, undefined, true);
       this.playEstablishingShot();
       this.saveProgress();
@@ -715,7 +729,7 @@ export class Game {
     let dt = Math.min(0.05, (now - this.last) / 1000);
     this.last = now;
     this.frameCount++;
-    if (this.paused) dt = 0;
+    if (this.paused || this.choosing) dt = 0;
     if (this.hitStop > 0) {
       this.hitStop -= dt;
       dt *= 0.1;
@@ -804,6 +818,7 @@ export class Game {
   }
 
   private updatePlay(dt: number): void {
+    if (this.choosing) return;
     this.runTimers(dt);
     if (this.introTimer > 0) {
       // The swoop: the hero cheers, then turns to face the hall. Input waits.
@@ -899,6 +914,7 @@ export class Game {
       this.potions,
       hero.def.abilities.map((_, i) => hero.cooldownFraction(i)),
       hero.cooldowns,
+      this.maxPotions,
     );
   }
 
@@ -972,6 +988,20 @@ export class Game {
     for (const e of this.enemies) {
       e.update(dt, ctx);
       if (!e.alive) continue;
+      if (e.burn > 0) {
+        e.burn -= dt;
+        e.burnTick -= dt;
+        if (Math.random() < 0.5) this.glow.spawn({ x: e.position.x + (Math.random() - 0.5) * 0.6, y: 0.4 + Math.random() * 1.4, z: e.position.z + (Math.random() - 0.5) * 0.6, vy: 1.6, life: 0.5, size: 0.14, sizeEnd: 0.02, color: this.fireColor, intensity: 4 });
+        if (e.burnTick <= 0) {
+          e.burnTick = 0.5;
+          const dealt = e.hurt(Math.round(e.burnDps * 0.5), e.position, 0);
+          if (dealt > 0) this.floatAt(e.position, e.def.scale * 2, String(dealt), 'crit');
+          if (!e.alive) {
+            this.onEnemyDied(e);
+            continue;
+          }
+        }
+      }
       const bx = e.position.x;
       const bz = e.position.z;
       this.crypt.colliders.resolve(e.position, e.radius);
@@ -1031,7 +1061,13 @@ export class Game {
     const inArc = dist < 1.1 || this.tmp.normalize().dot(facing) > 0.15;
     this.audio.play('swing');
     if (dist > e.def.reach + hero.radius || !inArc || !hero.alive) return;
+    const before = hero.hp;
     this.damageHero(e.def.damage * this.difficulty.enemyDamage, e.position);
+    if (hero.hp < before && this.lvl('thorns') && e.alive) {
+      const back = e.hurt(12 * this.lvl('thorns'), hero.position, 1.5);
+      if (back > 0) this.floatAt(e.position, e.def.scale * 2.2, `${back} Thorns`, 'heal');
+      if (!e.alive) this.onEnemyDied(e);
+    }
     if (e.def.kind === 'brute') this.shake(0.3);
   }
 
@@ -1091,6 +1127,7 @@ export class Game {
       damage *= 2.2;
       crit = true;
     }
+    damage *= 1 + 0.25 * this.lvl('mighty');
     damage = Math.round(damage * (0.9 + Math.random() * 0.2));
     const dealt = e.hurt(damage, from, crit ? knockback * 1.8 : knockback);
     if (dealt < 0) return false;
@@ -1106,6 +1143,11 @@ export class Game {
     this.hitStop = Math.max(this.hitStop, crit ? 0.09 : 0.045);
     if (crit) this.shake(0.25);
     hero.resource = Math.min(100, hero.resource + 3);
+    if (this.lvl('vampire')) this.healHero(2 * this.lvl('vampire'), false);
+    if (this.lvl('fire') && e.alive) {
+      e.burn = 3;
+      e.burnDps = 6 * this.lvl('fire');
+    }
     if (!e.alive) this.onEnemyDied(e);
     // Thief: Surprise Attack.
     else if (hero.def.id === 'thief' && Math.random() < hero.def.passive.chance) {
@@ -1131,7 +1173,7 @@ export class Game {
       this.burst(e.position.clone().setY(1.2), this.gold, 50, 5);
       this.shake(0.3);
       this.later(0.5, () => this.dropPotion(e.position.clone().setY(0)));
-    } else if (Math.random() < this.difficulty.potionDrop) {
+    } else if (Math.random() < this.difficulty.potionDrop + 0.15 * this.lvl('lucky')) {
       this.later(0.5, () => this.dropPotion(e.position.clone().setY(0)));
     }
   }
@@ -1188,6 +1230,54 @@ export class Game {
     this.hazardCooldown = 0.8;
     this.tip('spikes', 'Ouch! Watch out for spike traps on the floor.');
     this.damageHero(8 * Math.max(0.5, this.difficulty.enemyDamage), new THREE.Vector3(trap.x, 0, trap.z));
+  }
+
+  private lvl(id: keyof typeof BLESSINGS): number {
+    return this.blessings[id] ?? 0;
+  }
+
+  private get maxPotions(): number {
+    return MAX_POTIONS + this.lvl('pouch');
+  }
+
+  /** Puts the chosen blessings' effects on the hero (after a new hero is made). */
+  private applyBlessings(): void {
+    const hero = this.hero;
+    hero.speedBoost = 1 + 0.12 * this.lvl('swift');
+    hero.dodgeRecharge = Math.max(0.4, 1 - 0.2 * this.lvl('swift'));
+    hero.powerRecharge = Math.max(0.3, 1 - 0.25 * this.lvl('surge'));
+    hero.maxHp = hero.def.maxHp + 30 * this.lvl('heart');
+    hero.hp = Math.min(hero.hp, hero.maxHp);
+  }
+
+  private offerBlessings(): void {
+    if (this.phase !== 'play' || !this.hero.alive) return;
+    const options = rollBlessings(this.blessings);
+    if (!options.length) return;
+    this.choosing = true;
+    this.ui.prompt(null);
+    this.ui.hint(null);
+    this.audio.play('pillar');
+    this.ui.showBlessings(options, this.blessings, (b: Blessing) => this.takeBlessing(b));
+  }
+
+  private takeBlessing(b: Blessing): void {
+    this.blessings[b.id] = (this.blessings[b.id] ?? 0) + 1;
+    this.applyBlessings();
+    const hero = this.hero;
+    if (b.id === 'heart') hero.hp = hero.maxHp;
+    if (b.id === 'pouch') this.potions = Math.min(this.maxPotions, this.potions + 2);
+    this.choosing = false;
+    this.input.clear();
+    this.ui.hideScreen();
+    this.ui.setHero(hero.def, this.heroName, hero.maxHp);
+    this.ui.setQuest(this.level, this.pillars);
+    this.ui.objective('Follow the arrow to the golden door');
+    this.ui.setBlessings(this.blessings, BLESSINGS);
+    this.audio.play('start');
+    this.burst(hero.position.clone().setY(1.2), new THREE.Color(b.color), 60, 4);
+    this.floatAt(hero.position, 2.8, b.name + '!', 'heal');
+    this.saveProgress();
   }
 
   /** Teaches something once, the first time it matters. */
@@ -1639,7 +1729,7 @@ export class Game {
       this.audio.play('block');
       this.audio.play('hit');
       this.shake(0.12);
-      const chance = this.difficulty.id === 'easy' ? 0.5 : 0.35;
+      const chance = (this.difficulty.id === 'easy' ? 0.5 : 0.35) + 0.15 * this.lvl('lucky');
       if (Math.random() < chance) this.later(0.15, () => this.dropPotion(c.position.clone()));
       else this.burst(c.position.clone().setY(0.8), this.gold, 20, 3);
       return false;
@@ -1663,7 +1753,7 @@ export class Game {
   private collectPickups(): void {
     this.pickups = this.pickups.filter((pk) => {
       if (pk.base.distanceTo(this.hero.position.clone().setY(0)) > 1.3) return true;
-      if (this.potions >= MAX_POTIONS) return true;
+      if (this.potions >= this.maxPotions) return true;
       this.potions++;
       this.audio.play('pickup');
       this.floatAt(pk.base, 1.6, 'Potion +1', 'heal');

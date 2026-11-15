@@ -41,6 +41,10 @@ export class Hero extends Character {
   /** Shield points left on the Mage's Arcane Shield. */
   barrier = 0;
   state: State = 'free';
+  /** Blessing effects: move speed, and how fast the dodge and powers recharge. */
+  speedBoost = 1;
+  dodgeRecharge = 1;
+  powerRecharge = 1;
 
   private stateTime = 0;
   private combo = 0;
@@ -176,7 +180,7 @@ export class Hero extends Character {
 
   private move(dt: number, move: THREE.Vector3): void {
     const target = move.lengthSq() > 0.001 ? move : null;
-    const speed = this.def.speed;
+    const speed = this.def.speed * this.speedBoost;
     const lambda = target ? 26 : 22;
     this.velocity.x = damp(this.velocity.x, target ? target.x * speed : 0, lambda, dt);
     this.velocity.z = damp(this.velocity.z, target ? target.z * speed : 0, lambda, dt);
@@ -200,7 +204,7 @@ export class Hero extends Character {
     const ability = this.def.abilities[slot];
     if (this.cooldowns[slot] > 0 || this.resource < ability.cost) return false;
     this.buffered = null;
-    this.cooldowns[slot] = ability.cooldown;
+    this.cooldowns[slot] = ability.cooldown * (slot === 2 ? this.dodgeRecharge : slot > 0 ? this.powerRecharge : 1);
     this.resource -= ability.cost;
     this.start(ability, input, events);
     return true;

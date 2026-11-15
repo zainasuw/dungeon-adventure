@@ -1669,3 +1669,204 @@ kbd {
     transition-duration: 0.01ms !important;
   }
 }
+
+/* ───────────── Blessings: pick one of three after a hall ───────────── */
+
+.screen--bless {
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: radial-gradient(ellipse at 50% 45%, rgba(40, 30, 10, 0.55), rgba(4, 4, 7, 0.82) 70%);
+  backdrop-filter: blur(4px);
+}
+
+.bless-wrap {
+  display: grid;
+  justify-items: center;
+  gap: 14px;
+  width: min(1060px, 100%);
+  text-align: center;
+  animation: card-in 0.35s var(--ease-out);
+}
+
+.bless-row {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 18px;
+  width: 100%;
+  margin-top: 8px;
+}
+
+.bless {
+  position: relative;
+  display: grid;
+  justify-items: center;
+  align-content: start;
+  gap: 10px;
+  min-height: 300px;
+  padding: 30px 22px 22px;
+  border: 2px solid color-mix(in srgb, var(--c) 45%, transparent);
+  border-radius: 20px;
+  background:
+    radial-gradient(circle at 50% 26%, color-mix(in srgb, var(--c) 26%, transparent), transparent 62%),
+    rgba(14, 13, 18, 0.95);
+  color: var(--ink);
+  cursor: pointer;
+  box-shadow: var(--shadow);
+  transition: transform 0.18s var(--ease-out), border-color 0.18s, box-shadow 0.18s;
+  animation: bless-in 0.45s var(--ease-out) both;
+}
+
+.bless:nth-child(2) {
+  animation-delay: 0.08s;
+}
+
+.bless:nth-child(3) {
+  animation-delay: 0.16s;
+}
+
+@keyframes bless-in {
+  from {
+    opacity: 0;
+    transform: translateY(26px) scale(0.96);
+  }
+}
+
+.bless:hover,
+.bless:focus-visible {
+  border-color: var(--c);
+  transform: translateY(-6px);
+  box-shadow: var(--shadow), 0 0 36px color-mix(in srgb, var(--c) 45%, transparent);
+  outline: none;
+}
+
+.bless__key {
+  position: absolute;
+  top: 12px;
+  left: 14px;
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+  background: rgba(244, 236, 216, 0.1);
+  font: 800 16px var(--sans);
+  color: var(--ink-dim);
+}
+
+.bless__art {
+  display: grid;
+  place-items: center;
+  width: 92px;
+  height: 92px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 50% 35%, color-mix(in srgb, var(--c) 55%, #000), #0c0b10 78%);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--c) 70%, transparent), 0 0 26px color-mix(in srgb, var(--c) 45%, transparent);
+  font-size: 54px;
+  color: #fff;
+}
+
+.bless__name {
+  font: 700 26px/1.1 var(--serif);
+  color: color-mix(in srgb, var(--c) 35%, white);
+}
+
+.bless__text {
+  font: 500 19px/1.4 var(--sans);
+  color: var(--ink);
+}
+
+.bless__lvl {
+  display: grid;
+  justify-items: center;
+  gap: 6px;
+  margin-top: auto;
+  font: 700 14px var(--sans);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--gold);
+}
+
+.bless__pips {
+  display: flex;
+  gap: 5px;
+}
+
+.bless__pips i {
+  width: 22px;
+  height: 7px;
+  border-radius: 4px;
+  background: rgba(244, 236, 216, 0.14);
+}
+
+.bless__pips i.on {
+  background: var(--c);
+}
+
+.bless__pips i.next {
+  background: color-mix(in srgb, var(--c) 45%, transparent);
+  animation: pip-wait 1.4s ease-in-out infinite;
+}
+
+.bless-help {
+  margin: 4px 0 0;
+  font: 500 17px var(--sans);
+  color: var(--ink-dim);
+}
+
+.plate__blessings {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.plate__blessings:empty {
+  display: none;
+}
+
+.mini-bless {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--c) 30%, #0c0b10);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--c) 70%, transparent);
+  font-size: 19px;
+  color: #fff;
+}
+
+.mini-bless small {
+  position: absolute;
+  right: -5px;
+  bottom: -5px;
+  min-width: 16px;
+  padding: 1px 3px;
+  border-radius: 6px;
+  background: var(--c);
+  font: 800 11px/1.2 var(--sans);
+  color: #111;
+  text-align: center;
+}
+
+@media (max-width: 900px) {
+  .bless-row {
+    grid-template-columns: 1fr;
+  }
+
+  .bless {
+    min-height: 0;
+    grid-template-columns: auto 1fr;
+    justify-items: start;
+    text-align: left;
+    padding: 16px;
+  }
+
+  .bless__art {
+    grid-row: span 3;
+    width: 64px;
+    height: 64px;
+    font-size: 38px;
+  }
+}

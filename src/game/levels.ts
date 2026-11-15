@@ -108,6 +108,8 @@ export interface SaveData {
   potionsUsed: number;
   /** Seconds played. */
   time: number;
+  /** Blessings chosen so far, by id and level. */
+  blessings?: Partial<Record<string, number>>;
 }
 
 const SAVE_KEY = 'dungeon-adventure:quest';
