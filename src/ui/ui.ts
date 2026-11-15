@@ -162,7 +162,7 @@ export class Ui {
     const cont = save
       ? `<button class="btn btn--primary btn--big" data-act="continue">
            <span>Continue</span>
-           <small>${save.name ? `${escapeHtml(save.name)} the ` : ''}${HERO_CLASSES[save.hero].name} · ${LEVELS[save.level]?.boss ? 'Final battle' : `Hall ${save.level + 1} of ${PILLAR_HALLS}`}</small>
+           <small>${save.name ? `${escapeHtml(save.name)} the ` : ''}${HERO_CLASSES[save.hero].name} · ${LEVELS[save.level]?.boss ? 'Final battle' : `Hall ${(save.stage ?? 0) + 1} of ${PILLAR_HALLS} · ${LEVELS[save.level]?.hall ?? ''}`}</small>
          </button>`
       : '';
     this.setScreen(

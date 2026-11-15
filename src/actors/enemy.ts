@@ -3,7 +3,7 @@ import type { Assets, SkeletonModel } from '../core/assets';
 import { damp, dampAngle } from '../core/math';
 import { Character } from './character';
 
-export type EnemyKind = 'runt' | 'skeleton' | 'brute' | 'mage' | 'king';
+export type EnemyKind = 'runt' | 'skeleton' | 'brute' | 'mage' | 'king' | 'charger';
 
 export interface EnemyDef {
   kind: EnemyKind;
@@ -24,6 +24,8 @@ export interface EnemyDef {
   /** Chance to shrug off a hit with its shield. */
   block: number;
   ranged?: { keepAway: number; projectileSpeed: number };
+  /** Lowers its shield and rushes in a straight line after a warning (the red lane). */
+  charge?: { distance: number; speed: number; windup: number };
   weapons: { item: string; hand: 'right' | 'left'; flip?: boolean; tilt?: number }[];
   eyes: string;
 }
@@ -105,6 +107,24 @@ export const ENEMIES: Record<EnemyKind, EnemyDef> = {
     weapons: [{ item: 'Skeleton_Axe', hand: 'right' }],
     eyes: '#c77dff',
   },
+  charger: {
+    kind: 'charger',
+    name: 'Shield Rammer',
+    model: 'Skeleton_Rogue',
+    scale: 1.12,
+    hp: 90,
+    speed: 3.2,
+    damage: 14,
+    reach: 1.7,
+    rest: 2.2,
+    clip: 'Taunt',
+    clipSpeed: 1,
+    hitAt: 0.5,
+    block: 0,
+    charge: { distance: 10, speed: 15, windup: 1 },
+    weapons: [{ item: 'Skeleton_Shield_Large_A', hand: 'left' }],
+    eyes: '#ff3a3a',
+  },
   mage: {
     kind: 'mage',
     name: 'Bone Mage',
@@ -125,7 +145,7 @@ export const ENEMIES: Record<EnemyKind, EnemyDef> = {
   },
 };
 
-type State = 'dormant' | 'rising' | 'chase' | 'windup' | 'recover' | 'hurt' | 'dead';
+type State = 'dormant' | 'rising' | 'chase' | 'windup' | 'recover' | 'hurt' | 'dead' | 'charge';
 
 export interface EnemyContext {
   target: THREE.Vector3;
@@ -138,6 +158,8 @@ export interface EnemyContext {
   mayAttack(enemy: Enemy): boolean;
   /** Which way to walk to reach the hero around obstacles, or null to go straight. */
   path(position: THREE.Vector3, out: THREE.Vector3): THREE.Vector3 | null;
+  /** A charging monster ran into a wall. */
+  bump(enemy: Enemy): void;
 }
 
 /** A skeleton that wakes, chases, telegraphs its swing, and falls apart. */
@@ -166,6 +188,14 @@ export class Enemy extends Character {
   private readonly steer = new THREE.Vector3();
   private readonly knock = new THREE.Vector3();
   private readonly route = new THREE.Vector3();
+  /** The Shield Rammer's rush: its direction, and how far is left to run. */
+  readonly chargeDir = new THREE.Vector3();
+  chargeLeft = 0;
+  /** True while the red warning lane should show. */
+  get chargeWarning(): boolean {
+    return this.state === 'windup' && !!this.def.charge;
+  }
+  private readonly lastPos = new THREE.Vector3();
 
   constructor(assets: Assets, def: EnemyDef, hpScale: number) {
     super(assets, def.model, assets.skeletonClips);
@@ -301,6 +331,37 @@ export class Enemy extends Character {
         return;
       case 'chase':
         this.updateChase(dt, ctx);
+        return;
+      case 'charge':
+        this.updateCharge(dt, ctx);
+    }
+  }
+
+  private updateCharge(dt: number, ctx: EnemyContext): void {
+    const c = this.def.charge!;
+    // Hit a wall last frame (the game pushed it back)? Dazed: a free moment to hit it.
+    const moved = this.position.distanceTo(this.lastPos);
+    if (this.stateTime > 0.12 && moved < c.speed * dt * 0.35) {
+      this.chargeLeft = 0;
+      this.state = 'hurt';
+      this.stateTime = 0;
+      this.stun = 1.6;
+      this.velocity.set(0, 0, 0);
+      this.animator.play('Hit_B', { loop: false, fade: 0.05, restart: true });
+      ctx.bump(this);
+      return;
+    }
+    this.lastPos.copy(this.position);
+    const step = Math.min(this.chargeLeft, c.speed * dt);
+    this.position.addScaledVector(this.chargeDir, step);
+    this.chargeLeft -= step;
+    if (!this.struck && this.position.distanceTo(ctx.target) < this.def.reach) {
+      this.struck = true;
+      ctx.strike(this);
+    }
+    if (this.chargeLeft <= 0) {
+      this.cooldown = this.def.rest * (0.8 + Math.random() * 0.4);
+      this.toChase();
     }
   }
 
@@ -320,6 +381,8 @@ export class Enemy extends Character {
       // Lost the hero in the smoke: shuffle about.
       this.wanderAngle += (Math.random() - 0.5) * dt * 3;
       this.steer.set(Math.sin(this.wanderAngle), 0, Math.cos(this.wanderAngle)).multiplyScalar(0.35);
+    } else if (def.charge && dist > 2.5 && dist < def.charge.distance - 1 && this.cooldown <= 0 && ctx.mayAttack(this)) {
+      return this.startAttack(this.toTarget.clone().divideScalar(Math.max(dist, 0.001)));
     } else if (def.ranged) {
       const dir = this.toTarget.clone().divideScalar(Math.max(dist, 0.001));
       if (dist > def.ranged.keepAway + 1.5) this.steer.copy(ctx.path(this.position, this.route) ?? dir);
@@ -385,6 +448,26 @@ export class Enemy extends Character {
       if (ctx.targetVisible) {
         this.toTarget.copy(ctx.target).sub(this.position).setY(0);
         this.facing = dampAngle(this.facing, Math.atan2(this.toTarget.x, this.toTarget.z), 2.5, dt);
+      }
+      if (this.def.charge) {
+        // Aim locks in for the last half of the warning, so a sidestep dodges it.
+        const c = this.def.charge;
+        if (this.stateTime < c.windup * 0.5 && ctx.targetVisible) {
+          this.toTarget.copy(ctx.target).sub(this.position).setY(0);
+          this.facing = dampAngle(this.facing, Math.atan2(this.toTarget.x, this.toTarget.z), 6, dt);
+        }
+        this.chargeDir.set(Math.sin(this.facing), 0, Math.cos(this.facing));
+        this.telegraph = Math.min(1, this.stateTime / c.windup);
+        if (this.stateTime >= c.windup) {
+          this.telegraph = 0;
+          this.state = 'charge';
+          this.stateTime = 0;
+          this.struck = false;
+          this.chargeLeft = c.distance;
+          this.lastPos.copy(this.position);
+          this.animator.play('Running_C', { speed: 1.6, fade: 0.05 });
+        }
+        return;
       }
       this.telegraph = Math.min(1, p / this.def.hitAt);
       if (p >= this.def.hitAt && !this.struck) {

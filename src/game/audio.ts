@@ -181,6 +181,14 @@ export class Audio {
     window.setTimeout(life, 1500);
   }
 
+  /** A coin pickup; each coin in a quick streak rings a little higher. */
+  coin(streak: number): void {
+    const ctx = this.ensure();
+    if (!ctx || this.muted || ctx.state !== 'running') return;
+    const k = Math.pow(2, Math.min(streak, 12) / 12);
+    this.arp(ctx.currentTime, [1568 * k, 2093 * k], 0.05, 0.07, 0.25);
+  }
+
   play(name: Sfx): void {
     const ctx = this.ensure();
     if (!ctx || this.muted || ctx.state !== 'running') return;

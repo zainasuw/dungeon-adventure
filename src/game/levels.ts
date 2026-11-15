@@ -66,7 +66,7 @@ export const LEVELS: Level[] = [
     blurb: 'Catch the runaway wisps!',
     mood: 3,
     crystal: '#7dff9e',
-    sleepers: ['skeleton', 'runt', 'skeleton', 'runt'],
+    sleepers: ['skeleton', 'runt', 'charger', 'runt'],
     waves: [['skeleton', 'runt', 'runt']],
     potions: [[-13, -8], [13, 8.5]],
     job: { kind: 'wisps', spots: [[-10, 6], [9, 6], [0, -8]] },
@@ -92,7 +92,7 @@ export const LEVELS: Level[] = [
     blurb: 'Smash the cursed crystals. Mind the spikes!',
     mood: 4,
     crystal: '#ff7a3d',
-    sleepers: ['brute', 'skeleton', 'mage', 'skeleton'],
+    sleepers: ['brute', 'charger', 'mage', 'skeleton'],
     waves: [['runt', 'runt', 'runt']],
     potions: [[-13, -8.5], [13, 8.5], [-13, 8.5]],
     job: { kind: 'crystals', spots: [[-8, 7], [8.2, 7.8], [0, -8]] },
@@ -118,7 +118,7 @@ export const LEVELS: Level[] = [
     mood: 6,
     crystal: '#8fd3ff',
     sleepers: ['skeleton', 'runt', 'skeleton', 'mage'],
-    waves: [['runt', 'runt', 'skeleton']],
+    waves: [['runt', 'charger', 'skeleton']],
     potions: [[-18, -9], [18, 10.5], [0, -11]],
     job: { kind: 'lanterns', spots: [[-13, 7], [13, 7], [0, -9]] },
   },
@@ -131,7 +131,7 @@ export const LEVELS: Level[] = [
     mood: 7,
     crystal: '#ffe27a',
     sleepers: ['runt', 'skeleton', 'runt', 'brute'],
-    waves: [['runt', 'runt'], ['skeleton', 'runt'], ['runt', 'brute'], ['skeleton', 'skeleton']],
+    waves: [['runt', 'runt'], ['charger', 'runt'], ['runt', 'brute'], ['skeleton', 'charger']],
     potions: [[-14, -9], [14, 9], [-3, 11.5]],
     job: { kind: 'defend', seconds: 40 },
   },
@@ -212,6 +212,11 @@ export interface SaveData {
   coins?: number;
   /** Blessings chosen so far, by id and level. */
   blessings?: Partial<Record<string, number>>;
+  /** Which hall of the run (0 = first) and the run's halls in order. */
+  stage?: number;
+  route?: number[];
+  /** Max health bought from the merchant. */
+  bonusHp?: number;
 }
 
 const SAVE_KEY = 'dungeon-adventure:quest';

@@ -96,8 +96,8 @@ interface Timer {
 const REDUCED_MOTION = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 const ALTAR_REACH = 3.2;
 /** Save the quest in the browser and offer "Continue"? Off: every visit starts fresh. */
-const KEEP_PROGRESS = false;
-if (!KEEP_PROGRESS) clearSave();
+/** Progress is kept on this device, so closing the tab doesn't lose the quest (Continue on the title). */
+const KEEP_PROGRESS = true;
 /** Where the four heroes stand on the select screen. */
 const LINEUP_X = [-3.375, -1.125, 1.125, 3.375];
 const LINEUP_Z = 2.8;
@@ -144,10 +144,13 @@ export class Game {
 
   private enemies: Enemy[] = [];
   private readonly rings = new Map<Enemy, THREE.Mesh>();
+  /** The red lane a Shield Rammer shows before it charges. */
+  private readonly lanes = new Map<Enemy, THREE.Mesh>();
   /** Glowing summoning circles on the floor, shown just before a monster appears. */
   private portals: { mesh: THREE.Mesh; at: THREE.Vector3; t: number; size: number }[] = [];
   private readonly portalGeometry = new THREE.PlaneGeometry(2.2, 2.2);
   private readonly portalTexture = Game.makePortalTexture();
+  private readonly laneTexture = Game.makeLaneTexture();
   private readonly portalColor = new THREE.Color('#b25cff');
   /** The travelling merchant who sets up shop in a cleared hall. */
   private merchant: { who: Character; props: THREE.Group; box: Crate['box']; items: ShopItem[] } | null = null;
@@ -207,6 +210,7 @@ export class Game {
   // Hero select: all four heroes in a row; the chosen one steps forward and spins.
   private lineup: Hero[] = [];
   private chosen = 0;
+  private camX = 0;
   private spin = 0;
   private lastDrag = -10;
   /** Seconds left of the swoop from the menu into the hall; input waits. */
@@ -378,6 +382,10 @@ export class Game {
   }
 
   start(): void {
+    // Closing or hiding the tab mid-quest keeps the progress.
+    window.addEventListener('pagehide', () => {
+      if (this.phase === 'play' && this.step !== 'exiting') this.saveProgress();
+    });
     this.last = performance.now();
     requestAnimationFrame(this.frame);
   }
@@ -526,6 +534,13 @@ export class Game {
     this.playTime = save.time;
     this.blessings = (save.blessings ?? {}) as BlessingLevels;
     this.coins = save.coins ?? 0;
+    this.stage = save.stage ?? 0;
+    this.route = save.route?.length === 5 ? [...save.route] : randomRoute();
+    this.route[this.stage] = save.level;
+    this.pillars = Math.min(this.stage, PILLAR_HALLS);
+    this.bonusHp = save.bonusHp ?? 0;
+    this.pathReward = null;
+    this.openingDone = this.stage > 0;
     this.enterPlay(save.hero);
   }
 
@@ -617,6 +632,9 @@ export class Game {
       time: this.playTime,
       blessings: this.blessings,
       coins: this.coins,
+      stage: this.stage,
+      route: this.route,
+      bonusHp: this.bonusHp,
     } satisfies SaveData);
   }
 
@@ -790,6 +808,8 @@ export class Game {
   private clearActors(): void {
     for (const e of this.enemies) this.scene.remove(e.root);
     for (const ring of this.rings.values()) this.scene.remove(ring);
+    for (const lane of this.lanes.values()) this.scene.remove(lane);
+    this.lanes.clear();
     for (const p of this.portals) this.scene.remove(p.mesh);
     this.portals = [];
     this.clearJob();
@@ -843,6 +863,20 @@ export class Game {
     ring.visible = false;
     this.scene.add(ring);
     this.rings.set(enemy, ring);
+    const charge = ENEMIES[kind].charge;
+    if (charge) {
+      const geo = new THREE.PlaneGeometry(1.5, charge.distance);
+      geo.translate(0, charge.distance / 2, 0);
+      geo.rotateX(Math.PI / 2);
+      const lane = new THREE.Mesh(
+        geo,
+        new THREE.MeshBasicMaterial({ map: this.laneTexture, transparent: true, opacity: 0, depthWrite: false, side: THREE.DoubleSide }),
+      );
+      lane.visible = false;
+      lane.renderOrder = 2;
+      this.scene.add(lane);
+      this.lanes.set(enemy, lane);
+    }
     this.enemies.push(enemy);
     return enemy;
   }
@@ -871,6 +905,35 @@ export class Game {
       this.burst(e.position.clone().setY(0.9), this.portalColor, 26, 3.5);
       this.audio.play('rise');
     });
+  }
+
+  /** The charge warning: a dark-edged red lane with white arrows, readable on any floor. */
+  private static makeLaneTexture(): THREE.CanvasTexture {
+    const w = 64;
+    const h = 384;
+    const c = document.createElement('canvas');
+    c.width = w;
+    c.height = h;
+    const g = c.getContext('2d')!;
+    g.fillStyle = 'rgba(90, 0, 12, 0.6)';
+    g.fillRect(0, 0, w, h);
+    g.fillStyle = 'rgba(255, 60, 60, 0.95)';
+    g.fillRect(0, 0, 5, h);
+    g.fillRect(w - 5, 0, 5, h);
+    g.strokeStyle = 'rgba(255, 235, 235, 0.95)';
+    g.lineWidth = 7;
+    g.lineJoin = 'round';
+    // Arrows pointing along the lane (the far end of the texture is the charge direction).
+    for (let y = 30; y < h; y += 64) {
+      g.beginPath();
+      g.moveTo(14, y + 18);
+      g.lineTo(w / 2, y);
+      g.lineTo(w - 14, y + 18);
+      g.stroke();
+    }
+    const tex = new THREE.CanvasTexture(c);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    return tex;
   }
 
   /** A soft glowing circle with a bright rim and a few rune ticks, drawn once. */
@@ -1644,21 +1707,40 @@ export class Game {
     if (this.phase === 'play') this.updateWorldUi();
   }
 
+  /**
+   * "Hor+": on a narrow screen (a phone held upright) the lens widens so you
+   * still see as much of the room from side to side as on a wide screen.
+   */
+  private fovFor(base: number): number {
+    const aspect = this.camera.aspect;
+    const ref = 1.4;
+    if (aspect >= ref) return base;
+    const half = THREE.MathUtils.degToRad(base / 2);
+    const wide = Math.atan(Math.tan(half) * ref);
+    const v = THREE.MathUtils.radToDeg(2 * Math.atan(Math.tan(wide) / aspect));
+    return Math.min(v, 62);
+  }
+
   private updateCamera(dt: number, t: number): void {
-    if (this.phase !== 'select' && this.phase !== 'title' && this.camera.fov !== 30) {
-      this.camera.fov = THREE.MathUtils.damp(this.camera.fov, 30, 6, dt);
-      if (Math.abs(this.camera.fov - 30) < 0.05) this.camera.fov = 30;
+    const playFov = this.fovFor(30);
+    if (this.phase !== 'select' && this.phase !== 'title' && this.camera.fov !== playFov) {
+      this.camera.fov = THREE.MathUtils.damp(this.camera.fov, playFov, 6, dt);
+      if (Math.abs(this.camera.fov - playFov) < 0.05) this.camera.fov = playFov;
       this.camera.updateProjectionMatrix();
     }
     if (this.phase === 'select' || this.phase === 'title') {
       // A wide lens on the row of heroes, swaying gently on the title.
-      if (Math.abs(this.camera.fov - 36) > 0.01) {
-        this.camera.fov = THREE.MathUtils.damp(this.camera.fov, 36, 5, dt);
+      const menuFov = this.fovFor(36);
+      if (Math.abs(this.camera.fov - menuFov) > 0.01) {
+        this.camera.fov = THREE.MathUtils.damp(this.camera.fov, menuFov, 5, dt);
         this.camera.updateProjectionMatrix();
       }
       const title = this.phase === 'title';
       this.rig.setView(title ? Math.sin(t * 0.25) * 4 : 0, title ? 10 : 8, title ? 9.8 : 8.6);
-      this.rig.update(dt, t, this.camTarget.set(0, title ? 1.25 : 0.95, LINEUP_Z + 0.3));
+      // On a narrow phone only two heroes fit: follow the one being looked at.
+      const pick = !title && this.camera.aspect < 1 ? this.lineup[this.chosen] : undefined;
+      this.camX = THREE.MathUtils.damp(this.camX, pick ? pick.position.x * 0.85 : 0, 6, dt);
+      this.rig.update(dt, t, this.camTarget.set(this.camX, title ? 1.25 : pick ? 0.15 : 0.95, LINEUP_Z + 0.3));
       return;
     } else if (this.phase === 'victory') {
       // Hero stands to the right of the panel on wide screens.
@@ -1830,7 +1912,10 @@ export class Game {
       this.tip('crates', 'Smash barrels and crates with <kbd>F</kbd>. There might be a potion inside!');
     }
     if (this.step === 'fight') {
-      if (this.enemies.some((e) => e.telegraph > 0.2 && e.position.distanceTo(hero.position) < e.def.reach + 1.5)) {
+      if (this.enemies.some((e) => e.chargeWarning)) {
+        this.tip('charge', 'Red lane = a <b>Shield Rammer</b> is about to charge. Step out of the lane!', 5);
+      }
+      if (this.enemies.some((e) => e.telegraph > 0.2 && !e.def.charge && e.position.distanceTo(hero.position) < e.def.reach + 1.5)) {
         this.tip('dodge', 'Red ring = a skeleton is about to hit. Press <kbd>Space</kbd> to dodge!');
       }
       if (hero.hp < hero.maxHp * 0.6 && this.potions > 0) this.tip('potion', 'Hurt? Press <kbd>H</kbd> to drink a potion');
@@ -1936,6 +2021,13 @@ export class Game {
       shoot: (e: Enemy, dir: THREE.Vector3) => this.enemyShoot(e, dir),
       path: (pos: THREE.Vector3, out: THREE.Vector3) => this.nav.direction(pos, out),
       mayAttack: (e: Enemy) => this.mayAttack(e),
+      bump: (e: Enemy) => {
+        this.shake(0.25);
+        this.puff(e.position, 14);
+        this.audio.play('block');
+        this.floatAt(e.position, e.def.scale * 2.4, 'Dazed!', 'crit');
+        this.tip('dazed', 'It hit the wall and is <b>dazed</b>! Now is your chance to hit it!', 4);
+      },
     };
     // Refresh the walking map toward the hero a few times a second.
     this.navTimer -= dt;
@@ -1995,13 +2087,26 @@ export class Game {
       const ring = this.rings.get(e);
       if (ring) this.scene.remove(ring);
       this.rings.delete(e);
+      const lane = this.lanes.get(e);
+      if (lane) this.scene.remove(lane);
+      this.lanes.delete(e);
       return false;
     });
   }
 
   private updateRings(): void {
+    for (const [e, lane] of this.lanes) {
+      const on = e.alive && e.chargeWarning;
+      lane.visible = on;
+      if (!on) continue;
+      lane.position.set(e.position.x, 0.05, e.position.z);
+      lane.rotation.y = e.facing;
+      // Flickers faster as the charge gets close.
+      const t = e.telegraph;
+      (lane.material as THREE.MeshBasicMaterial).opacity = 0.35 + t * 0.55 + (t > 0.7 ? Math.sin(this.time * 40) * 0.1 : 0);
+    }
     for (const [e, ring] of this.rings) {
-      const on = e.alive && e.telegraph > 0;
+      const on = e.alive && e.telegraph > 0 && !e.def.charge;
       ring.visible = on;
       if (!on) continue;
       const reach = e.def.ranged ? 1.1 : e.def.reach * 0.9;
@@ -2146,7 +2251,7 @@ export class Game {
 
   private onEnemyDied(e: Enemy): void {
     this.kills++;
-    const worth = { runt: 2, skeleton: 3, mage: 4, brute: 6, king: 60 }[e.def.kind] + (e.elite ? 10 : 0);
+    const worth = { runt: 2, skeleton: 3, mage: 4, brute: 6, charger: 4, king: 60 }[e.def.kind] + (e.elite ? 10 : 0);
     this.dropCoins(e.position, worth);
     this.audio.play('bones');
     this.puff(e.position, 18);
@@ -2197,7 +2302,7 @@ export class Game {
   private mayAttack(e: Enemy): boolean {
     const limit = this.difficulty.id === 'easy' ? 1 : this.difficulty.id === 'normal' ? 2 : 3;
     let busy = 0;
-    for (const o of this.enemies) if (o !== e && o.alive && (o.state === 'windup' || o.state === 'recover')) busy++;
+    for (const o of this.enemies) if (o !== e && o.alive && (o.state === 'windup' || o.state === 'recover' || o.state === 'charge')) busy++;
     return busy < limit;
   }
 
@@ -2383,6 +2488,9 @@ export class Game {
     }
   }
 
+  private coinStreak = 0;
+  private coinStreakTimer = 0;
+
   private updateCoins(dt: number): void {
     const hero = this.hero.position;
     let got = 0;
@@ -2414,11 +2522,16 @@ export class Game {
       }
       return true;
     });
+    this.coinStreakTimer -= dt;
+    if (this.coinStreakTimer <= 0) this.coinStreak = 0;
     if (got) {
       this.coins += got;
       this.ui.setCoins(this.coins, true);
-      this.audio.play('coin');
-      this.tip('coins', 'Coins! Collect them for a high score.');
+      this.audio.coin(this.coinStreak);
+      this.coinStreak += got;
+      this.coinStreakTimer = 0.7;
+      this.burst(this.hero.position.clone().setY(1.1), this.gold, 6 * got, 2.2);
+      this.tip('coins', 'Coins! Spend them at the <b>merchant</b> who comes after each hall.');
     }
   }
 

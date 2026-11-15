@@ -2270,3 +2270,139 @@ body.touch-mode button kbd {
     min-height: 0;
   }
 }
+
+/* ───────────── Phones held upright ───────────── */
+
+@media (max-width: 640px) {
+  /* Title: credits small at the very bottom, never over the name. */
+  .screen--title {
+    padding-bottom: 34px;
+  }
+
+  .credits {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 8px;
+    margin: 0;
+    padding: 0 12px;
+    font-size: 10px;
+    text-align: center;
+  }
+
+  /* Select: the Back link sits above the heading instead of on it. */
+  .pick-head {
+    top: 52px;
+  }
+
+  .pick-back {
+    top: 12px;
+    left: 12px;
+    font-size: 16px;
+  }
+
+  .pick-title {
+    font-size: 30px;
+  }
+
+  /* Play: a compact hero panel that leaves room for the pause button. */
+  .plate {
+    top: 10px;
+    left: 10px;
+    max-width: calc(100vw - 78px);
+    gap: 10px;
+    padding: 10px 84px 10px 10px;
+  }
+
+  .plate__crest {
+    width: 44px;
+    height: 44px;
+    font-size: 26px;
+  }
+
+  .plate__coins {
+    top: 10px;
+    right: 10px;
+    font-size: 16px;
+  }
+
+  .topright {
+    top: 10px;
+    right: 10px;
+  }
+
+  /* The goal goes under the hero panel, away from the thumb buttons. */
+  .quest {
+    top: 92px;
+    bottom: auto;
+    gap: 4px;
+    width: calc(100vw - 24px);
+  }
+
+  .quest__hall {
+    font-size: 11px;
+  }
+
+  .quest__objective {
+    font-size: 15px;
+  }
+
+  .hint {
+    max-width: calc(100vw - 24px);
+    padding: 10px 16px;
+    font-size: 16px;
+    white-space: normal;
+    text-align: center;
+  }
+
+  body.touch-mode .dock {
+    grid-template-columns: 54px 54px 88px;
+    grid-template-rows: 54px 54px;
+    gap: 10px;
+  }
+
+  body.touch-mode .dock .slot {
+    width: 54px;
+    height: 54px;
+  }
+
+  body.touch-mode .dock .slot[data-slot='0'] {
+    width: 88px;
+    height: 88px;
+  }
+
+  body.touch-mode .hint {
+    bottom: 150px;
+  }
+
+  .banner__title {
+    font-size: 34px;
+  }
+}
+
+@media (max-width: 640px) {
+  /* A tip is one paragraph on a phone, not a row of separate pieces. */
+  .hint {
+    display: block;
+  }
+
+  .hint kbd {
+    margin: 0 2px;
+  }
+
+  /* Smaller hero card so the heroes themselves show above it. */
+  .pick-card__blurb {
+    display: none;
+  }
+
+  .pick-card {
+    gap: 10px;
+    padding: 12px 14px;
+  }
+}
+
+@media (max-width: 640px) {
+  .hint {
+    border-radius: 18px;
+  }
+}
