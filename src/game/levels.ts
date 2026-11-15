@@ -41,6 +41,8 @@ export interface Level {
   boss?: boolean;
   /** This hall's special job (see Job). */
   job?: Job;
+  /** One short line for the choose-your-path doors: what this hall is like. */
+  blurb?: string;
 }
 
 export const LEVELS: Level[] = [
@@ -60,6 +62,7 @@ export const LEVELS: Level[] = [
     intro: { yaw: 38, pitch: 30, distance: 21, focus: [0, 1, -1] },
     pillar: 'Encapsulation',
     hall: 'The Overgrown Hall',
+    blurb: 'A quiet hall full of sleeping skeletons.',
     mood: 3,
     crystal: '#7dff9e',
     sleepers: ['skeleton', 'runt', 'skeleton', 'runt'],
@@ -71,6 +74,7 @@ export const LEVELS: Level[] = [
     intro: { yaw: -40, pitch: 22, distance: 17, focus: [0, 2.2, 0] },
     pillar: 'Inheritance',
     hall: 'The Frozen Library',
+    blurb: 'Find the lost spell books.',
     mood: 0,
     crystal: '#5ee0ff',
     sleepers: ['skeleton', 'brute', 'runt', 'mage'],
@@ -83,6 +87,7 @@ export const LEVELS: Level[] = [
     intro: { yaw: 180, pitch: 26, distance: 15, focus: [0, 1.5, 2] },
     pillar: 'Polymorphism',
     hall: 'The Ember Deep',
+    blurb: 'Smash the cursed crystals. Mind the spikes!',
     mood: 4,
     crystal: '#ff7a3d',
     sleepers: ['brute', 'skeleton', 'mage', 'skeleton'],
@@ -107,6 +112,7 @@ export const LEVELS: Level[] = [
     intro: { yaw: 30, pitch: 24, distance: 26, focus: [0, 1, -2] },
     pillar: '',
     hall: 'The Moonlit Graveyard',
+    blurb: 'Light the lanterns. The graves are restless!',
     mood: 6,
     crystal: '#8fd3ff',
     sleepers: ['skeleton', 'runt', 'skeleton', 'mage'],
@@ -119,6 +125,7 @@ export const LEVELS: Level[] = [
     intro: { yaw: -35, pitch: 26, distance: 22, focus: [0, 1, -1] },
     pillar: '',
     hall: 'The Forest Clearing',
+    blurb: 'Protect the pillar until time runs out.',
     mood: 7,
     crystal: '#ffe27a',
     sleepers: ['runt', 'skeleton', 'runt', 'brute'],
@@ -153,6 +160,18 @@ export const PILLAR_HALLS = PILLARS.length;
 
 /** Scene indexes (into LEVELS) for a run: four pillar halls, then the boss. */
 export const DEFAULT_ROUTE = [7, 5, 2, 6, 4];
+
+/** Halls the choose-your-path doors pick from (the Old Crypt is always first, the King last). */
+export const PATH_POOL = [5, 2, 6, 3, 1];
+
+/** What a path door promises when that hall is cleared. */
+export type PathReward = 'potions' | 'coins' | 'heal';
+
+/** A fresh run: the crypt, three halls (replaced by the player's door picks), then the King. */
+export function randomRoute(): number[] {
+  const pool = [...PATH_POOL].sort(() => Math.random() - 0.5);
+  return [7, pool[0], pool[1], pool[2], 4];
+}
 
 export type DifficultyId = 'easy' | 'normal' | 'hard';
 

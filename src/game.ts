@@ -9,7 +9,7 @@ import { dampAngle } from './core/math';
 import { Input } from './core/input';
 import { Audio } from './game/audio';
 import { BLESSINGS, rollBlessings, type Blessing, type BlessingLevels } from './game/blessings';
-import { clearSave, DEFAULT_ROUTE, DIFFICULTIES, LEVELS, loadSave, MAX_POTIONS, PILLAR_HALLS, PILLARS, writeSave, type Difficulty, type DifficultyId, type SaveData } from './game/levels';
+import { clearSave, DEFAULT_ROUTE, DIFFICULTIES, PATH_POOL, randomRoute, type PathReward, LEVELS, loadSave, MAX_POTIONS, PILLAR_HALLS, PILLARS, writeSave, type Difficulty, type DifficultyId, type SaveData } from './game/levels';
 import { MOODS, type Mood } from './render/moods';
 import { Renderer } from './render/renderer';
 import { applySeeThrough, seeThrough } from './render/see-through';
@@ -128,6 +128,9 @@ export class Game {
   private level = 0;
   /** The scenes of this run, in order, and how far along we are. */
   private route: number[] = [...DEFAULT_ROUTE];
+  /** The reward promised by the door the player picked, given when that hall is cleared. */
+  private pathReward: PathReward | null = null;
+  private pathAsked = false;
   private stage = 0;
   private pillars = 0;
   private potions = 1;
@@ -487,7 +490,8 @@ export class Game {
     this.coins = 0;
     this.heroName = name;
     this.difficulty = DIFFICULTIES[difficulty];
-    this.route = [...DEFAULT_ROUTE];
+    this.route = randomRoute();
+    this.pathReward = null;
     this.stage = 0;
     this.level = this.route[0];
     this.pillars = 0;
@@ -1018,6 +1022,11 @@ export class Game {
     return best;
   }
 
+  private nearCrystal(within: number): JobItem | null {
+    if (LEVELS[this.level].job?.kind !== 'crystals') return null;
+    return this.jobItems.find((j) => !j.done && j.at.distanceTo(this.hero.position) < within) ?? null;
+  }
+
   private nearLantern(): JobItem | null {
     if (LEVELS[this.level].job?.kind !== 'lanterns' || this.phase !== 'play') return null;
     return this.jobItems.find((j) => !j.done && j.at.distanceTo(this.hero.position) < 2.6) ?? null;
@@ -1111,6 +1120,7 @@ export class Game {
         const i = this.crypt.colliders.boxes.indexOf(j.box);
         if (i >= 0) this.crypt.colliders.boxes.splice(i, 1);
         this.nav = new NavGrid(this.crypt.colliders);
+        this.guideNav = null;
       }
       this.audio.play('crit');
       this.shake(0.35);
@@ -1225,6 +1235,7 @@ export class Game {
   private onCleared(): void {
     this.step = 'cleared';
     if (LEVELS[this.level].boss) return this.onBossDefeated();
+    this.givePathReward();
     this.pillars = Math.max(this.pillars, this.stage + 1);
     this.crypt.door.setProgress(this.pillars);
     this.crypt.door.open();
@@ -1257,6 +1268,7 @@ export class Game {
   private exitHall(): void {
     this.step = 'exiting';
     this.walkout = 0;
+    this.pathAsked = false;
     this.ui.prompt(null);
     this.ui.hint(null);
     this.ui.showHud(false);
@@ -1276,6 +1288,12 @@ export class Game {
     if (Math.random() < 0.5) this.glow.spawn({ x: (Math.random() - 0.5) * 3, y: 0.3 + Math.random() * 2.5, z: hero.position.z - 2 - Math.random() * 3, vz: 1.5, life: 1, size: 0.1, sizeEnd: 0.01, color: this.gold, intensity: 3 });
     // The doorway flares with light as the hero steps into it.
     if (this.walkout > 0.4) this.crypt.door.flare(Math.min(1, (this.walkout - 0.4) / 0.6));
+    // Halfway into the doorway: choose which hall comes next (not before the King).
+    if (before < 0.7 && this.walkout >= 0.7 && !this.pathAsked && this.stage + 2 < this.route.length) {
+      this.pathAsked = true;
+      this.offerPaths();
+      return;
+    }
     if (before < 0.85 && this.walkout >= 0.85) this.ui.fade(true, true);
     if (before < 1.45 && this.walkout >= 1.45) {
       if (this.stage >= this.route.length - 1) {
@@ -1623,7 +1641,10 @@ export class Game {
     const hasMouse = k.pointerActive && this.raycaster.ray.intersectPlane(this.floor, this.heroInput.aim) !== null;
     // Aim assist: snap to the best monster near where the player points, or the nearest one.
     const target = this.autoTarget(hasMouse ? this.heroInput.aim : null);
+    const crystal = target ? null : this.nearCrystal(3.6);
     if (target) this.heroInput.aim.copy(target.position);
+    // No monster close: swings aim at a cursed crystal within reach, so kids don't have to line up.
+    else if (crystal) this.heroInput.aim.copy(crystal.at);
     else if (!hasMouse) {
       const dir = move.lengthSq() > 0.01 ? move : new THREE.Vector3(Math.sin(this.hero.facing), 0, Math.cos(this.hero.facing));
       this.heroInput.aim.copy(this.hero.position).add(dir);
@@ -2218,6 +2239,50 @@ export class Game {
     hero.hp = Math.min(hero.hp, hero.maxHp);
   }
 
+  private offerPaths(): void {
+    const used = new Set(this.route.slice(0, this.stage + 1));
+    const open = PATH_POOL.filter((l) => !used.has(l)).sort(() => Math.random() - 0.5);
+    const halls = open.slice(0, 2);
+    if (halls.length < 2) return;
+    const rewards = (['potions', 'coins', 'heal'] as PathReward[]).sort(() => Math.random() - 0.5);
+    this.choosing = true;
+    this.audio.play('pillar');
+    this.ui.showPaths(
+      halls.map((l, i) => ({ name: LEVELS[l].hall, blurb: LEVELS[l].blurb ?? '', color: LEVELS[l].crystal, reward: rewards[i] })),
+      (i) => {
+        this.route[this.stage + 1] = halls[i];
+        this.pathReward = rewards[i];
+        this.choosing = false;
+        this.input.clear();
+        this.ui.hideScreen();
+        this.audio.play('start');
+      },
+    );
+  }
+
+  /** Gives the reward the chosen door promised. */
+  private givePathReward(): void {
+    const r = this.pathReward;
+    this.pathReward = null;
+    if (!r) return;
+    const hero = this.hero;
+    let text = '';
+    if (r === 'potions') {
+      this.potions = Math.min(this.maxPotions, this.potions + 2);
+      text = '+2 potions';
+    } else if (r === 'coins') {
+      this.coins += 40;
+      this.ui.setCoins(this.coins, true);
+      text = '+40 coins';
+    } else {
+      hero.hp = hero.maxHp;
+      text = 'Full health!';
+    }
+    this.audio.play('chest');
+    this.burst(hero.position.clone().setY(1.2), this.gold, 40, 4);
+    this.floatAt(hero.position, 3.2, `Path reward: ${text}`, 'heal');
+  }
+
   private offerBlessings(): void {
     if (this.phase !== 'play' || !this.hero.alive) return;
     const options = rollBlessings(this.blessings);
@@ -2319,7 +2384,8 @@ export class Game {
     this.arrowColor.set(color).multiplyScalar(1.6);
     mat.color.lerp(this.arrowColor, 1 - Math.exp(-6 * dt));
     let dir = this.tmp.copy(goal).sub(hero.position).setY(0).normalize();
-    if (this.crypt.connected) {
+    // Follow the walking path around pillars and through doorways, not a straight line.
+    {
       if (!this.guideNav || this.guideNav.grid !== this.crypt || this.guideGoal.distanceToSquared(goal) > 4 || (this.guideTimer -= dt) < 0) {
         if (!this.guideNav || this.guideNav.grid !== this.crypt) this.guideNav = { grid: this.crypt, nav: new NavGrid(this.crypt.colliders, 0.7) };
         this.guideNav.nav.update(goal);
@@ -2736,7 +2802,10 @@ export class Game {
       else this.dropCoins(c.position, 3 + Math.floor(Math.random() * 3));
       return false;
     });
-    if (broke) this.nav = new NavGrid(this.crypt.colliders);
+    if (broke) {
+      this.nav = new NavGrid(this.crypt.colliders);
+      this.guideNav = null;
+    }
     return broke;
   }
 

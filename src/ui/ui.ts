@@ -41,6 +41,13 @@ export type FloatKind = 'damage' | 'crit' | 'hurt' | 'heal' | 'info' | 'block';
 const KEY_LABEL: Record<SlotKey, string> = { LMB: 'F', RMB: 'G', SPACE: 'Space', Q: 'R' };
 
 // Two small drawings of our own for things the icon set lacks.
+export interface PathOption {
+  name: string;
+  blurb: string;
+  color: string;
+  reward: 'potions' | 'coins' | 'heal';
+}
+
 const POTION_PATH =
   'M206 36h100v44h-14v84c70 20 120 84 120 158 0 92-70 154-156 154S100 414 100 322c0-74 50-138 120-158V80h-14z M256 290c-18-28-66-26-66 12 0 32 66 70 66 70s66-38 66-70c0-38-48-40-66-12z';
 const PILLAR_PATH =
@@ -378,6 +385,47 @@ export class Ui {
     this.blessPick = pick;
     this.screen.querySelectorAll<HTMLButtonElement>('.bless').forEach((el) => el.addEventListener('click', () => pick(Number(el.dataset.i))));
     this.focusFirst('.bless');
+  }
+
+  /**
+   * Choose your path, like Hades: two doors, each showing the hall behind it,
+   * what you'll do there and the reward for clearing it.
+   */
+  showPaths(options: PathOption[], onPick: (i: number) => void): void {
+    const rewardArt: Record<PathOption['reward'], string> = {
+      potions: icon(POTION_PATH, 'icon', 'evenodd'),
+      coins: '<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9" fill="#ffd23a" stroke="#a9781a" stroke-width="2"/><circle cx="12" cy="12" r="5" fill="none" stroke="#a9781a" stroke-width="1.5"/></svg>',
+      heal: iconByName('regeneration'),
+    };
+    const rewardText: Record<PathOption['reward'], string> = { potions: '2 potions', coins: '40 coins', heal: 'Full health' };
+    const cards = options
+      .map(
+        (o, i) => `<button type="button" class="bless path" data-i="${i}" style="--c:${o.color}">
+          <span class="bless__key">${i + 1}</span>
+          <span class="path__glow" aria-hidden="true"></span>
+          <b class="bless__name">${o.name}</b>
+          <span class="bless__text">${o.blurb}</span>
+          <span class="path__reward"><span class="path__reward-art">${rewardArt[o.reward]}</span>Reward: ${rewardText[o.reward]}</span>
+        </button>`,
+      )
+      .join('');
+    this.setScreen(
+      'paths',
+      `<div class="bless-wrap path-wrap" role="dialog" aria-modal="true" aria-labelledby="path-title">
+        <p class="kicker">Two doors open</p>
+        <h2 id="path-title" class="card__title card__title--big">Choose your path</h2>
+        <div class="bless-row path-row">${cards}</div>
+        <p class="bless-help">Click one, or press <kbd>1</kbd> <kbd>2</kbd></p>
+      </div>`,
+    );
+    const pick = (i: number): void => {
+      if (!options[i]) return;
+      this.blessPick = null;
+      onPick(i);
+    };
+    this.blessPick = pick;
+    this.screen.querySelectorAll<HTMLButtonElement>('.path').forEach((el) => el.addEventListener('click', () => pick(Number(el.dataset.i))));
+    this.focusFirst('.path');
   }
 
   /** The big health bar for the Skeleton King, or null to hide it. */
@@ -741,7 +789,7 @@ export class Ui {
   private onKey = (e: KeyboardEvent): void => {
     const name = this.screenName;
     if (e.target instanceof HTMLInputElement && e.key !== 'Escape') return;
-    if (name === 'bless' && this.blessPick && /^[123]$/.test(e.key)) {
+    if ((name === 'bless' || name === 'paths') && this.blessPick && /^[123]$/.test(e.key)) {
       e.preventDefault();
       this.blessPick(Number(e.key) - 1);
       return;
