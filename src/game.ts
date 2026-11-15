@@ -50,6 +50,12 @@ interface Potion {
   base: THREE.Vector3;
 }
 
+interface Crate {
+  object: THREE.Object3D;
+  box: { minX: number; maxX: number; minZ: number; maxZ: number };
+  position: THREE.Vector3;
+}
+
 interface Timer {
   at: number;
   run: () => void;
@@ -99,6 +105,7 @@ export class Game {
   private projectiles: Projectile[] = [];
   private zones: Zone[] = [];
   private pickups: Potion[] = [];
+  private crates: Crate[] = [];
   private timers: Timer[] = [];
   private renew = { left: 0, rate: 0 };
   private hitStop = 0;
@@ -134,6 +141,8 @@ export class Game {
   private readonly heroColor = new THREE.Color();
   private readonly heroHot = new THREE.Color();
   private readonly white = new THREE.Color('#ffffff');
+  private readonly woodColor = new THREE.Color('#a0703f');
+  private heartTexture: THREE.Texture | null = null;
   private readonly gold = new THREE.Color('#ffc35a');
   private readonly red = new THREE.Color('#ff4040');
   private readonly heal = new THREE.Color('#7dffa0');
@@ -507,6 +516,7 @@ export class Game {
 
     if (!live) return;
     for (const [x, z] of level.potions) this.dropPotion(new THREE.Vector3(x, 0, z));
+    this.placeCrates();
     this.levelStartPotions = this.potions;
     this.step = 'explore';
     this.hero.revive();
@@ -546,6 +556,9 @@ export class Game {
     for (const p of this.projectiles) this.scene.remove(p.mesh);
     for (const z of this.zones) this.scene.remove(z.mesh);
     for (const p of this.pickups) this.scene.remove(p.object);
+    for (const c of this.crates) this.removeCrate(c);
+    if (this.crates.length) this.nav = new NavGrid(this.crypt.colliders);
+    this.crates = [];
     this.enemies = [];
     this.rings.clear();
     this.projectiles = [];
@@ -624,6 +637,11 @@ export class Game {
       last ? 'All four pillars! Run for the golden door!' : `${left} more to go! Follow the arrow to the door`,
     );
     this.later(2.5, () => this.crypt.altar.settle());
+    // A reward for clearing the hall, so you're never left without a potion.
+    this.later(1.2, () => {
+      this.dropPotion(new THREE.Vector3(1.8, 0, 3));
+      this.burst(new THREE.Vector3(1.8, 1, 3), this.heal, 30, 3);
+    });
     this.ui.objective(last ? 'The way out is open! Follow the arrow to the golden door' : 'Follow the arrow to the golden door');
     if (this.hero.state === 'free') this.hero.animator.play('Cheer', { loop: false, fade: 0.15, restart: true });
   }
@@ -853,6 +871,11 @@ export class Game {
 
     this.updateArrow(dt);
     this.autoPotion(dt);
+    if (this.pickups.some((k) => k.base.distanceTo(this.tmp.copy(hero.position).setY(0)) < 6)) {
+      this.tip('potion-seen', 'The glowing heart is a <b>health potion</b>. Walk over it to grab it!');
+    } else if (this.crates.some((c) => c.position.distanceTo(hero.position) < 3)) {
+      this.tip('crates', 'Smash barrels and crates with <kbd>F</kbd>. There might be a potion inside!');
+    }
     if (this.step === 'fight') {
       if (this.enemies.some((e) => e.telegraph > 0.2 && e.position.distanceTo(hero.position) < e.def.reach + 1.5)) {
         this.tip('dodge', 'Red ring = a skeleton is about to hit. Press <kbd>Space</kbd> to dodge!');
@@ -1264,6 +1287,7 @@ export class Game {
       if (dist > 0.6 && this.tmp.normalize().dot(dir) < Math.cos(step.arc / 2)) continue;
       this.hitEnemy(e, step.damage, p, finisher ? 4.5 : 2.2);
     }
+    this.smashCrates(p, step.range + 0.6, dir, step.arc);
     if (finisher) this.shake(0.18);
   }
 
@@ -1287,6 +1311,7 @@ export class Game {
           if (!e.active || e.position.distanceTo(hero.position) > kind.radius + e.radius) continue;
           this.hitEnemy(e, kind.damage, hero.position, kind.type === 'nova' ? 6 : 3.5);
         }
+        this.smashCrates(hero.position, kind.radius + 0.6);
         break;
       }
       case 'bolt': {
@@ -1446,6 +1471,7 @@ export class Game {
       p.mesh.rotation.y += dt * 6;
       const pos = p.mesh.position;
       this.glow.spawn({ x: pos.x, y: pos.y, z: pos.z, life: 0.25, size: 0.16, sizeEnd: 0.01, color: p.color, intensity: 3, drag: 2 });
+      if (!p.hostile && this.smashCrates(pos, 0.9)) p.life = 0;
       let dead = p.life <= 0 || this.crypt.colliders.hits(pos.x, pos.z, 0.1);
       if (!dead && p.hostile) {
         const hero = this.hero;
@@ -1516,29 +1542,97 @@ export class Game {
     // Nudge toward the middle until the spot is clear of props.
     const p = at.clone();
     for (let i = 0; i < 20 && this.crypt.colliders.hits(p.x, p.z, 0.6); i++) p.multiplyScalar(0.9);
-    const object = new THREE.Group();
-    const bottle = this.assets.piece('bottle_A_green');
-    bottle.traverse((o) => {
-      if (o instanceof THREE.Mesh) {
-        const m = (o.material as THREE.MeshStandardMaterial).clone();
-        m.color.set('#ff4f78');
-        m.emissive.set('#ff2a5a');
-        m.emissiveIntensity = 0.35;
-        o.material = m;
-        o.castShadow = true;
-      }
-    });
-    bottle.scale.setScalar(0.55);
-    object.add(bottle);
+    const object = this.makePotion();
     object.position.copy(p);
     this.scene.add(object);
     this.pickups.push({ object, base: p.clone() });
   }
 
+  /** A round flask of glowing red potion with a white heart floating over it: reads as "health". */
+  private makePotion(): THREE.Group {
+    const group = new THREE.Group();
+    const liquid = new THREE.Mesh(
+      new THREE.SphereGeometry(0.27, 24, 16),
+      new THREE.MeshStandardMaterial({ color: '#ff2a4f', emissive: '#ff1040', emissiveIntensity: 0.7, roughness: 0.15, metalness: 0.1 }),
+    );
+    liquid.position.y = 0.27;
+    const neck = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.08, 0.1, 0.2, 16),
+      new THREE.MeshStandardMaterial({ color: '#ffe3ea', roughness: 0.1, transparent: true, opacity: 0.85 }),
+    );
+    neck.position.y = 0.6;
+    const cork = new THREE.Mesh(new THREE.CylinderGeometry(0.095, 0.085, 0.09, 12), new THREE.MeshStandardMaterial({ color: '#8a5a32', roughness: 0.8 }));
+    cork.position.y = 0.73;
+    for (const m of [liquid, neck, cork]) m.castShadow = true;
+    if (!this.heartTexture) this.heartTexture = makeHeartTexture();
+    const heart = new THREE.Sprite(new THREE.SpriteMaterial({ map: this.heartTexture, transparent: true, depthWrite: false }));
+    heart.position.y = 1.25;
+    heart.scale.setScalar(0.55);
+    heart.name = 'heart';
+    group.add(liquid, neck, cork, heart);
+    return group;
+  }
+
+  /** Barrels and crates to smash. Each blocks the way until it's broken. */
+  private placeCrates(): void {
+    this.crypt.crateSpots.forEach((spot, i) => {
+      const object = this.assets.piece(i % 2 ? 'box_small' : 'barrel_small');
+      object.traverse((o) => {
+        o.castShadow = true;
+        o.receiveShadow = true;
+      });
+      const holder = new THREE.Group();
+      holder.add(object);
+      holder.position.copy(spot);
+      holder.rotation.y = (i * 1.7) % Math.PI;
+      this.scene.add(holder);
+      const half = 0.45;
+      const box = { minX: spot.x - half, maxX: spot.x + half, minZ: spot.z - half, maxZ: spot.z + half };
+      this.crypt.colliders.boxes.push(box);
+      this.crates.push({ object: holder, box, position: spot.clone() });
+    });
+    this.nav = new NavGrid(this.crypt.colliders);
+  }
+
+  private removeCrate(c: Crate): void {
+    this.scene.remove(c.object);
+    const i = this.crypt.colliders.boxes.indexOf(c.box);
+    if (i >= 0) this.crypt.colliders.boxes.splice(i, 1);
+  }
+
+  /** Breaks crates within reach (in front of the hero for a swing). Returns true if any broke. */
+  private smashCrates(from: THREE.Vector3, reach: number, facing?: THREE.Vector3, arc = Math.PI * 2): boolean {
+    let broke = false;
+    this.crates = this.crates.filter((c) => {
+      const d = this.tmp.copy(c.position).sub(from).setY(0);
+      const dist = d.length();
+      if (dist > reach) return true;
+      if (facing && dist > 0.8 && d.normalize().dot(facing) < Math.cos(arc / 2)) return true;
+      broke = true;
+      this.removeCrate(c);
+      this.puff(c.position, 14);
+      for (let i = 0; i < 18; i++) {
+        const v = new THREE.Vector3().randomDirection().multiplyScalar(3);
+        this.dust.spawn({ x: c.position.x, y: 0.6, z: c.position.z, vx: v.x, vy: Math.abs(v.y) + 2, vz: v.z, life: 0.8, size: 0.16, sizeEnd: 0.06, color: this.woodColor, intensity: 1, drag: 1.5 });
+      }
+      this.audio.play('block');
+      this.audio.play('hit');
+      this.shake(0.12);
+      const chance = this.difficulty.id === 'easy' ? 0.5 : 0.35;
+      if (Math.random() < chance) this.later(0.15, () => this.dropPotion(c.position.clone()));
+      else this.burst(c.position.clone().setY(0.8), this.gold, 20, 3);
+      return false;
+    });
+    if (broke) this.nav = new NavGrid(this.crypt.colliders);
+    return broke;
+  }
+
   private updatePickups(t: number): void {
     for (const pk of this.pickups) {
-      pk.object.position.y = 0.35 + Math.sin(t * 2.4 + pk.base.x) * 0.15;
+      pk.object.position.y = 0.12 + Math.sin(t * 2.4 + pk.base.x) * 0.1;
       pk.object.rotation.y = t * 1.4;
+      const heart = pk.object.getObjectByName('heart');
+      if (heart) heart.scale.setScalar(0.55 + Math.sin(t * 5 + pk.base.z) * 0.06);
       if (Math.random() < 0.15) {
         this.glow.spawn({ x: pk.base.x + (Math.random() - 0.5) * 0.6, y: 0.4, z: pk.base.z + (Math.random() - 0.5) * 0.6, vy: 0.9, life: 0.9, size: 0.09, sizeEnd: 0.01, color: this.red, intensity: 2.5 });
       }
@@ -1736,4 +1830,33 @@ export class Game {
     seeThrough.radius.value = this.hero.root.visible ? size.y * 0.13 : 0;
     seeThrough.depth.value = -this.projected.copy(this.hero.position).setY(1.2).applyMatrix4(this.camera.matrixWorldInverse).z;
   }
+}
+
+/** A white heart with a soft red glow, drawn once for every potion's floating marker. */
+function makeHeartTexture(): THREE.Texture {
+  const size = 128;
+  const canvas = document.createElement('canvas');
+  canvas.width = canvas.height = size;
+  const ctx = canvas.getContext('2d')!;
+  const heart = (): void => {
+    ctx.beginPath();
+    ctx.moveTo(64, 104);
+    ctx.bezierCurveTo(20, 74, 14, 46, 30, 32);
+    ctx.bezierCurveTo(44, 20, 60, 26, 64, 40);
+    ctx.bezierCurveTo(68, 26, 84, 20, 98, 32);
+    ctx.bezierCurveTo(114, 46, 108, 74, 64, 104);
+    ctx.closePath();
+  };
+  ctx.shadowColor = 'rgba(255, 40, 80, 0.95)';
+  ctx.shadowBlur = 22;
+  ctx.fillStyle = '#ff3b5c';
+  heart();
+  ctx.fill();
+  ctx.shadowBlur = 0;
+  ctx.lineWidth = 7;
+  ctx.strokeStyle = '#ffffff';
+  ctx.stroke();
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  return texture;
 }

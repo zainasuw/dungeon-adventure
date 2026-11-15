@@ -40,12 +40,12 @@ const KEY_LABEL: Record<SlotKey, string> = { LMB: 'F', RMB: 'G', SPACE: 'Space',
 
 // Two small drawings of our own for things the icon set lacks.
 const POTION_PATH =
-  'M200 40h112v40h-16v86c74 22 128 90 128 170 0 98-80 136-168 136S88 434 88 336c0-80 54-148 128-170V80h-16z M146 330c0 64 50 92 110 92s110-28 110-92c0-12-2-24-6-34H152c-4 10-6 22-6 34z';
+  'M206 36h100v44h-14v84c70 20 120 84 120 158 0 92-70 154-156 154S100 414 100 322c0-74 50-138 120-158V80h-14z M256 290c-18-28-66-26-66 12 0 32 66 70 66 70s66-38 66-70c0-38-48-40-66-12z';
 const PILLAR_PATH =
   'M120 56h272v44H120z M152 100h208v26H152z M176 126h44v262h-44z M234 126h44v262h-44z M292 126h44v262h-44z M152 388h208v26H152z M120 414h272v44H120z';
 
-function icon(path: string, className = 'icon'): string {
-  return `<svg class="${className}" viewBox="0 0 512 512" aria-hidden="true"><path d="${path}"/></svg>`;
+function icon(path: string, className = 'icon', rule: 'nonzero' | 'evenodd' = 'nonzero'): string {
+  return `<svg class="${className}" viewBox="0 0 512 512" aria-hidden="true"><path fill-rule="${rule}" d="${path}"/></svg>`;
 }
 
 function iconByName(name: IconName, className?: string): string {
@@ -420,7 +420,7 @@ export class Ui {
       <div class="dock">
         ${slots}
         <div class="slot slot--potion" title="Drink a potion">
-          <span class="slot__icon">${icon(POTION_PATH)}</span>
+          <span class="slot__icon">${icon(POTION_PATH, 'icon', 'evenodd')}</span>
           <span class="slot__count"></span>
           <kbd class="slot__key">H</kbd>
           <span class="slot__name">Potion</span>
