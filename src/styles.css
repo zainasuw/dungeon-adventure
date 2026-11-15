@@ -252,13 +252,13 @@ kbd {
   background: linear-gradient(180deg, #f7dd8f 0%, #d8aa45 55%, #b8862c 100%);
   color: #1d1505;
   font-weight: 700;
-  box-shadow: 0 6px 22px rgba(212, 175, 55, 0.28), inset 0 1px 0 rgba(255, 255, 255, 0.45);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.45), inset 0 1px 0 rgba(255, 255, 255, 0.45);
 }
 
 .btn--primary:hover {
   border-color: transparent;
   background: linear-gradient(180deg, #ffe9a8 0%, #e6b952 55%, #c3902f 100%);
-  box-shadow: 0 8px 28px rgba(212, 175, 55, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.5);
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.5);
 }
 
 .btn--ghost {
@@ -594,7 +594,7 @@ kbd {
   border-radius: 22px;
   background: rgba(13, 12, 17, 0.9);
   backdrop-filter: blur(10px);
-  box-shadow: var(--shadow), 0 0 40px color-mix(in srgb, var(--hero) 18%, transparent);
+  box-shadow: var(--shadow);
   transform: translateX(-50%);
   cursor: default;
 }
@@ -639,7 +639,7 @@ kbd {
 }
 
 .seg--small .seg__btn {
-  min-height: 40px;
+  min-height: 44px;
   font-size: 16px;
 }
 
@@ -1146,7 +1146,8 @@ kbd {
 }
 
 .bar--res .bar__fill {
-  background: linear-gradient(90deg, color-mix(in srgb, var(--hero) 70%, #000), var(--hero));
+  /* Gold, so the power bar never looks like a second health bar. */
+  background: linear-gradient(90deg, #a8761f, #f3d27a);
   transition: transform 0.15s linear;
 }
 
@@ -1346,7 +1347,8 @@ kbd {
   min-width: 34px;
   padding: 3px 6px;
   border-radius: 999px;
-  background: #ff4f78;
+  /* Deep rose so the white count reads clearly (white on light pink was 3.2:1). */
+  background: #c4234f;
   font: 800 13px var(--sans);
   color: #fff;
   text-align: center;
@@ -2682,4 +2684,44 @@ body.touch-mode button kbd {
 
 .crosshair[data-state='click'] .crosshair__text {
   display: block;
+}
+
+/* ───────────── Critique fixes ───────────── */
+
+/* A line under a heading (replaces the small gold labels that used to sit above). */
+.card__sub {
+  margin: -4px 0 0;
+  font: 500 16px/1.4 var(--sans);
+  color: var(--ink-dim);
+  text-align: center;
+  text-wrap: balance;
+}
+
+/* One helpful tip on the defeat card. */
+.card__tip {
+  margin: 0;
+  padding: 10px 14px;
+  border-radius: 12px;
+  background: rgba(244, 236, 216, 0.06);
+  font: 500 15px/1.45 var(--sans);
+  color: var(--ink);
+  text-align: center;
+  text-wrap: pretty;
+}
+
+.shop-item__need {
+  font: 600 14px var(--sans);
+  color: #ff9a9a;
+}
+
+/* An armed "tap again" button looks different, so the second tap is a choice. */
+.btn[data-armed] {
+  border-color: #ff8a6a;
+  color: #ffd0c0;
+}
+
+.pick-card__power,
+.card__text,
+.bless__text {
+  text-wrap: pretty;
 }

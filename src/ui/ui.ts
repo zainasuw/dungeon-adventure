@@ -174,7 +174,6 @@ export class Ui {
     this.setScreen(
       'title',
       `<header class="title2">
-        <p class="kicker">A 3D dungeon adventure</p>
         <h1 class="title2__name">Dungeon Adventure</h1>
         <p class="title2__tag">Wake the four pillars. Beat the skeletons. Escape!</p>
       </header>
@@ -329,8 +328,8 @@ export class Ui {
       (() => {
         const info = this.handlers.pauseInfo();
         return `<div class="card card--pause" role="dialog" aria-modal="true" aria-labelledby="pause-title">
-        <p class="kicker">${info.where}</p>
         <h2 id="pause-title" class="card__title">Paused</h2>
+        <p class="card__sub">${info.where}</p>
         ${this.pillarRow(info.pillars)}
         <p class="pause__coins"><span class="coin-icon" aria-hidden="true"></span><b>${info.coins}</b> coins</p>
         <div class="stack">
@@ -341,7 +340,7 @@ export class Ui {
           </div>
           <button class="btn" data-act="howto">How to play</button>
           <button class="btn" data-act="restart">Restart this hall</button>
-          <button class="btn btn--ghost" data-act="quit">Save and quit to title</button>
+          <button class="btn btn--ghost" data-act="quit">Back to title</button>
         </div>
         <p class="pause__hint">Press <kbd>Esc</kbd> to keep playing</p>
       </div>`;
@@ -359,9 +358,31 @@ export class Ui {
       this.showPause();
       this.focusFirst('[data-act="mute"]');
     });
-    this.on('restart', () => this.handlers.restartLevel());
-    this.on('quit', () => this.handlers.backToTitle());
+    // Two taps for anything that throws away progress, so a slip next to Resume is harmless.
+    this.confirmTap('restart', 'Tap again to restart', () => this.handlers.restartLevel());
+    this.confirmTap('quit', 'Tap again: back to title (your game is saved)', () => this.handlers.backToTitle());
     this.focusFirst();
+  }
+
+  /** First tap arms the button (its label asks again); a second tap within 3 seconds does it. */
+  private confirmTap(act: string, armedLabel: string, run: () => void): void {
+    const btn = this.screen.querySelector<HTMLButtonElement>(`[data-act="${act}"]`);
+    if (!btn) return;
+    const label = btn.textContent ?? '';
+    let timer = 0;
+    btn.addEventListener('click', () => {
+      if (btn.dataset.armed) {
+        window.clearTimeout(timer);
+        run();
+        return;
+      }
+      btn.dataset.armed = '1';
+      btn.textContent = armedLabel;
+      timer = window.setTimeout(() => {
+        delete btn.dataset.armed;
+        btn.textContent = label;
+      }, 3000);
+    });
   }
 
   showGameOver(stats: QuestStats): void {
@@ -369,14 +390,14 @@ export class Ui {
     this.setScreen(
       'gameover',
       `<div class="card card--end" role="dialog" aria-modal="true" aria-labelledby="go-title">
-        <p class="kicker kicker--blood">Defeated</p>
         <h2 id="go-title" class="card__title">${escapeHtml(stats.heroName || `The ${stats.hero.name}`)} fell in ${hall}</h2>
         <p class="card__text">${stats.pillars ? `Don't give up! You keep your ${stats.pillars} ${stats.pillars === 1 ? 'pillar' : 'pillars'} and start this hall fresh.` : 'Don\'t give up! Try this hall again, fresh and full of health.'}</p>
         ${this.pillarRow(stats.pillars)}
+        <p class="card__tip">${['Tip: when a red ring appears under a skeleton, press <kbd>Space</kbd> to dodge out of it.', 'Tip: drink a potion with <kbd>H</kbd> when your health gets low.', 'Tip: Easy mode has gentler monsters and more potions.', 'Tip: hold <kbd>F</kbd> to keep swinging at a monster.'][Math.floor(Math.random() * 4)]}</p>
         <div class="stack">
           <button class="btn btn--primary" data-act="retry">Try again</button>
           <button class="btn" data-act="hero">Pick another hero</button>
-          <button class="btn btn--ghost" data-act="quit">Quit to title</button>
+          <button class="btn btn--ghost" data-act="quit">Back to title</button>
         </div>
       </div>`,
     );
@@ -391,7 +412,6 @@ export class Ui {
     this.setScreen(
       'victory',
       `<div class="card card--end card--victory" role="dialog" aria-modal="true" aria-labelledby="win-title">
-        <p class="kicker">Quest complete</p>
         <h2 id="win-title" class="card__title card__title--big">You escaped!</h2>
         <p class="card__text">${stats.heroName ? `${escapeHtml(stats.heroName)} the ${stats.hero.name}` : `The ${stats.hero.name}`} woke all four pillars and walked out into the light.</p>
         ${this.pillarRow(4)}
@@ -399,12 +419,10 @@ export class Ui {
           ${stat('Coins', String(stats.coins))}
           ${stat('Time', formatTime(stats.time))}
           ${stat('Skeletons beaten', String(stats.kills))}
-          ${stat('Potions drunk', String(stats.potionsUsed))}
-          ${stat('Difficulty', DIFFICULTIES[stats.difficulty].label)}
         </div>
         <div class="stack stack--row">
           <button class="btn btn--primary" data-act="again">Play again</button>
-          <button class="btn btn--ghost" data-act="quit">Title screen</button>
+          <button class="btn" data-act="quit">Back to title</button>
         </div>
       </div>`,
     );
@@ -432,8 +450,8 @@ export class Ui {
     this.setScreen(
       'bless',
       `<div class="bless-wrap" role="dialog" aria-modal="true" aria-labelledby="bless-title" tabindex="-1">
-        <p class="kicker">The pillar blesses you</p>
         <h2 id="bless-title" class="card__title card__title--big">Choose a blessing</h2>
+        <p class="card__sub">A gift from the pillar. Pick one to keep for the rest of your quest.</p>
         <div class="bless-row">${cards}</div>
         <p class="bless-help">Click one, or press <kbd>1</kbd> <kbd>2</kbd> <kbd>3</kbd></p>
       </div>`,
@@ -475,7 +493,6 @@ export class Ui {
     this.setScreen(
       'paths',
       `<div class="bless-wrap path-wrap" role="dialog" aria-modal="true" aria-labelledby="path-title">
-        <p class="kicker">Two doors open</p>
         <h2 id="path-title" class="card__title card__title--big">Choose your path</h2>
         <div class="bless-row path-row">${cards}</div>
         <p class="bless-help">Click one, or press <kbd>1</kbd> <kbd>2</kbd></p>
@@ -508,14 +525,14 @@ export class Ui {
           <b class="bless__name">${it.name}</b>
           <span class="bless__text">${it.text}</span>
           <span class="shop-item__price">${it.sold ? 'Sold!' : `<i class="coin-dot"></i>${it.price}`}</span>
+          ${poor ? `<span class="shop-item__need">Need ${it.price - coins} more coins</span>` : ''}
         </button>`;
       })
       .join('');
     this.setScreen(
       'shop',
       `<div class="bless-wrap shop-wrap" role="dialog" aria-modal="true" aria-labelledby="shop-title" tabindex="-1">
-        <p class="kicker">The travelling merchant</p>
-        <h2 id="shop-title" class="card__title card__title--big">Spend your coins</h2>
+        <h2 id="shop-title" class="card__title card__title--big">The merchant's shop</h2>
         <p class="shop-purse"><i class="coin-dot"></i><b>${coins}</b> coins to spend</p>
         <div class="bless-row shop-row" style="--n:${items.length}">${cards}</div>
         <button type="button" class="btn shop-leave">Done shopping</button>
@@ -641,7 +658,7 @@ export class Ui {
 
   /** A big title card for entering a hall or claiming a pillar. */
   banner(kicker: string, title: string, sub: string, seconds = 2.8): void {
-    this.bannerEl.innerHTML = `<p class="kicker">${kicker}</p><h2 class="banner__title">${title}</h2><p class="banner__sub">${sub}</p>`;
+    this.bannerEl.innerHTML = `<h2 class="banner__title">${title}</h2><p class="banner__sub">${kicker} · ${sub}</p>`;
     this.bannerEl.classList.remove('banner--show');
     void this.bannerEl.offsetWidth;
     this.bannerEl.classList.add('banner--show');
