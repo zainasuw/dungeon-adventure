@@ -108,6 +108,8 @@ export interface SaveData {
   potionsUsed: number;
   /** Seconds played. */
   time: number;
+  /** Coins collected so far. */
+  coins?: number;
   /** Blessings chosen so far, by id and level. */
   blessings?: Partial<Record<string, number>>;
 }

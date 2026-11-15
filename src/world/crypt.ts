@@ -31,6 +31,8 @@ export interface Crypt {
   hazards: { x: number; z: number; half: number }[];
   /** Where smashable barrels and crates stand. */
   crateSpots: THREE.Vector3[];
+  /** Where the hall's treasure chest stands, and which way it faces. */
+  chest: { position: THREE.Vector3; facing: number };
 }
 
 const QUARTER = Math.PI / 2;
@@ -57,6 +59,7 @@ interface Theme {
   ): void;
   hazards: [number, number][];
   crates: [number, number][];
+  chest: [number, number, number];
 }
 
 const SMALL_PLAIN = ['floor_tile_small', 'floor_tile_small', 'floor_tile_small', 'floor_tile_small_broken_A', 'floor_tile_small_broken_B', 'floor_tile_small_weeds_A', 'floor_tile_small_decorated'];
@@ -82,13 +85,13 @@ const THEMES: Theme[] = [
     spawns: [[-4.6, 5.4], [4.8, 5.6], [0, -6.8], [-11.5, -2.8], [11.4, -3.2]],
     hazards: [],
     crates: [[-13.5, -3], [13.5, -6], [-6.5, 9.8], [6.8, 9.6], [-13.6, 5.5], [9.5, -10.2]],
+    chest: [-5.4, -10.1, 0.12],
     props(kit, solid) {
       solid('barrel_large', -14, -10);
       solid('barrel_small', -12.5, -10.5, 0.4);
       solid('box_stacked', -14.1, -8.2, 0.3);
       solid('crates_stacked', 13.9, -9.9, -0.2);
       solid('box_large', 12.2, -10.4, 0.1);
-      solid('chest_gold', -5.4, -10.3, 0.12);
       solid('table_long_broken', -12.6, 9.6, 0.08);
       solid('barrel_large', 14, 10);
       solid('barrel_small_stack', 12.4, 10.3, 0.5);
@@ -124,6 +127,7 @@ const THEMES: Theme[] = [
     spawns: [[-3, 6.5], [3.5, 7], [-8.5, -1], [9, 0.5], [2.5, -8]],
     hazards: [],
     crates: [[-13.6, -6.6], [13.4, -2], [-6.5, -9.8], [9.5, 7.5], [-13.6, 8], [0.5, 10]],
+    chest: [-3.8, -10, 0],
     props(kit, solid, torches, top) {
       solid('rubble_large', -13.6, -9.4, 0.4);
       solid('rubble_large', 13.2, -9.8, 2.2);
@@ -163,6 +167,7 @@ const THEMES: Theme[] = [
     spawns: [[-4.5, 6.5], [4.5, 6.5], [-12.5, 6.5], [12.5, 6.5], [0, -7]],
     hazards: [],
     crates: [[-13.4, -6.5], [13.4, -6.5], [-2.6, 9.8], [2.6, 9.8], [-13.4, 3.6], [13.4, 3.6]],
+    chest: [-8.6, -9.9, 0],
     props(kit, solid, torches, _top, block) {
       // Free-standing bookshelves make two aisles on each side.
       for (const [x, z] of [[-10, -4.5], [10, -4.5], [-10, 4], [10, 4]]) {
@@ -202,12 +207,12 @@ const THEMES: Theme[] = [
     spawns: [[-12.5, 6.5], [12.5, 6.5], [0, -7.5], [-12, -8], [12, -8]],
     hazards: [[-12, -6], [12, -6], [-12, 3.5], [12, 3.5]],
     crates: [[-9.5, 9.6], [9.5, 9.6], [-14, -1], [14, -1], [-6, -9.8], [6, -9.8]],
+    chest: [0, 9.6, Math.PI],
     props(kit, solid, torches, top) {
       solid('barrel_large', -14, 10);
       solid('barrel_large', 14, 10);
       solid('barrel_small_stack', -13.6, -10, 0.4);
       solid('box_stacked', 13.8, -10, -0.3);
-      solid('chest_gold', 0, 9.6, Math.PI);
       kit.instance('sword_shield_broken', -9.6, 0, -9.8, 0.2);
       kit.instance('sword_shield_broken', 9.6, 0, -9.8, -0.4);
       kit.instance('coin_stack_large', -1.4, 0, 9.9, 0.4);
@@ -353,5 +358,6 @@ export function buildCrypt(assets: Assets, embers: Particles, themeIndex = 0): C
     theme: themeIndex,
     hazards,
     crateSpots: theme.crates.map(([x, z]) => free(x, z)),
+    chest: { position: new THREE.Vector3(theme.chest[0], 0, theme.chest[1]), facing: theme.chest[2] },
   };
 }

@@ -33,6 +33,7 @@ export interface QuestStats {
   kills: number;
   potionsUsed: number;
   time: number;
+  coins: number;
 }
 
 export type FloatKind = 'damage' | 'crit' | 'hurt' | 'heal' | 'info' | 'block';
@@ -322,6 +323,7 @@ export class Ui {
         <p class="card__text">${stats.heroName ? `${escapeHtml(stats.heroName)} the ${stats.hero.name}` : `The ${stats.hero.name}`} woke all four pillars and walked out into the light.</p>
         ${this.pillarRow(4)}
         <div class="stats">
+          ${stat('Coins', String(stats.coins))}
           ${stat('Time', formatTime(stats.time))}
           ${stat('Skeletons beaten', String(stats.kills))}
           ${stat('Potions drunk', String(stats.potionsUsed))}
@@ -372,6 +374,18 @@ export class Ui {
     this.blessPick = pick;
     this.screen.querySelectorAll<HTMLButtonElement>('.bless').forEach((el) => el.addEventListener('click', () => pick(Number(el.dataset.i))));
     this.focusFirst('.bless');
+  }
+
+  setCoins(n: number, pop: boolean): void {
+    const el = this.hud.querySelector<HTMLElement>('[data-coins]');
+    if (!el) return;
+    el.textContent = String(n);
+    if (pop) {
+      const box = el.parentElement!;
+      box.classList.remove('plate__coins--pop');
+      void box.offsetWidth;
+      box.classList.add('plate__coins--pop');
+    }
   }
 
   /** Small icons under the hero plate for the blessings you have. */
@@ -453,6 +467,7 @@ export class Ui {
       <div class="plate">
         <div class="plate__crest">${iconByName(def.abilities[0].icon)}</div>
         <div class="plate__body">
+          <p class="plate__coins" title="Coins"><span class="coin-icon" aria-hidden="true"></span><b data-coins>0</b></p>
           <p class="plate__name">${name ? `${escapeHtml(name)} <span>the ${def.name}</span>` : def.name}</p>
           <div class="bar bar--hp" role="meter" aria-label="Health" aria-valuemin="0" aria-valuemax="${maxHp}">
             <span class="bar__lag"></span><span class="bar__fill"></span><span class="bar__text"></span>

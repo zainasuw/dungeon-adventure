@@ -1870,3 +1870,46 @@ kbd {
     font-size: 38px;
   }
 }
+
+/* ───────────── Coins ───────────── */
+
+.plate {
+  padding-right: 92px;
+}
+
+.plate__coins {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  padding: 4px 10px 4px 6px;
+  border-radius: 999px;
+  background: rgba(255, 204, 51, 0.12);
+  font: 800 18px var(--sans);
+  color: #ffd76a;
+}
+
+.coin-icon {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 35% 30%, #fff3b0, #ffcc33 45%, #b07a00 100%);
+  box-shadow: 0 0 8px rgba(255, 204, 51, 0.6);
+}
+
+.plate__coins--pop {
+  animation: coin-pop 0.3s var(--ease-out);
+}
+
+@keyframes coin-pop {
+  40% {
+    transform: scale(1.25);
+  }
+}
+
+.stats .stat:first-child {
+  grid-column: 1 / -1;
+}

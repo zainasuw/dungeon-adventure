@@ -57,6 +57,19 @@ interface Crate {
   position: THREE.Vector3;
 }
 
+interface Coin {
+  mesh: THREE.Mesh;
+  velocity: THREE.Vector3;
+  age: number;
+}
+
+interface Chest {
+  object: THREE.Group;
+  box: { minX: number; maxX: number; minZ: number; maxZ: number };
+  position: THREE.Vector3;
+  opened: boolean;
+}
+
 interface Timer {
   at: number;
   run: () => void;
@@ -107,6 +120,11 @@ export class Game {
   private zones: Zone[] = [];
   private pickups: Potion[] = [];
   private crates: Crate[] = [];
+  private coinsOnFloor: Coin[] = [];
+  private chest: Chest | null = null;
+  private coins = 0;
+  private readonly coinGeometry = new THREE.CylinderGeometry(0.2, 0.2, 0.06, 18);
+  private readonly coinMaterial = new THREE.MeshStandardMaterial({ color: '#ffcc33', emissive: '#a86b00', emissiveIntensity: 0.6, metalness: 0.9, roughness: 0.25 });
   /** Blessings chosen this quest, by level. */
   private blessings: BlessingLevels = {};
   /** True while the blessing cards are up; the game waits. */
@@ -386,6 +404,7 @@ export class Game {
 
   private startQuest(id: HeroClassId, name: string, difficulty: DifficultyId): void {
     this.blessings = {};
+    this.coins = 0;
     this.heroName = name;
     this.difficulty = DIFFICULTIES[difficulty];
     this.level = 0;
@@ -409,6 +428,7 @@ export class Game {
     this.potionsUsed = save.potionsUsed;
     this.playTime = save.time;
     this.blessings = (save.blessings ?? {}) as BlessingLevels;
+    this.coins = save.coins ?? 0;
     this.enterPlay(save.hero);
   }
 
@@ -427,6 +447,7 @@ export class Game {
     this.ui.hideScreen();
     this.ui.setHero(this.hero.def, this.heroName, this.hero.maxHp);
     this.ui.setBlessings(this.blessings, BLESSINGS);
+    this.ui.setCoins(this.coins, false);
     this.ui.showHud(false);
     this.phase = 'play';
     this.paused = false;
@@ -459,6 +480,7 @@ export class Game {
     this.ui.hideScreen();
     this.ui.setHero(this.hero.def, this.heroName, this.hero.maxHp);
     this.ui.setBlessings(this.blessings, BLESSINGS);
+    this.ui.setCoins(this.coins, false);
     this.ui.showHud(true);
     this.phase = 'play';
     this.paused = false;
@@ -488,6 +510,7 @@ export class Game {
       potionsUsed: this.potionsUsed,
       time: this.playTime,
       blessings: this.blessings,
+      coins: this.coins,
     } satisfies SaveData);
   }
 
@@ -501,6 +524,7 @@ export class Game {
       kills: this.kills,
       potionsUsed: this.potionsUsed,
       time: this.playTime,
+      coins: this.coins,
     };
   }
 
@@ -524,6 +548,7 @@ export class Game {
       enemy.facing = spot.facing;
       enemy.sleep();
     });
+    this.placeChest();
     this.waves = level.waves.map((w) => [...w]);
     if (this.difficulty.dropLastWave && this.waves.length > 1) this.waves.pop();
 
@@ -570,6 +595,14 @@ export class Game {
     for (const z of this.zones) this.scene.remove(z.mesh);
     for (const p of this.pickups) this.scene.remove(p.object);
     for (const c of this.crates) this.removeCrate(c);
+    for (const c of this.coinsOnFloor) this.scene.remove(c.mesh);
+    this.coinsOnFloor = [];
+    if (this.chest) {
+      this.scene.remove(this.chest.object);
+      const i = this.crypt.colliders.boxes.indexOf(this.chest.box);
+      if (i >= 0) this.crypt.colliders.boxes.splice(i, 1);
+      this.chest = null;
+    }
     if (this.crates.length) this.nav = new NavGrid(this.crypt.colliders);
     this.crates = [];
     this.enemies = [];
@@ -855,6 +888,8 @@ export class Game {
     this.updateZones(dt);
     this.collectPickups();
     this.updateHazards(dt);
+    this.updateCoins(dt);
+    this.updateChest();
 
     // The hall's steps.
     const altarDist = hero.position.distanceTo(this.crypt.altar.position);
@@ -1166,6 +1201,8 @@ export class Game {
 
   private onEnemyDied(e: Enemy): void {
     this.kills++;
+    const worth = { runt: 2, skeleton: 3, mage: 4, brute: 6 }[e.def.kind] + (e.elite ? 10 : 0);
+    this.dropCoins(e.position, worth);
     this.audio.play('bones');
     this.puff(e.position, 18);
     this.burst(e.position.clone().setY(1), this.gold, 18, 3);
@@ -1217,6 +1254,103 @@ export class Game {
     let busy = 0;
     for (const o of this.enemies) if (o !== e && o.alive && (o.state === 'windup' || o.state === 'recover')) busy++;
     return busy < limit;
+  }
+
+  /** The hall's treasure chest: locked until the hall is cleared, then walk up to open it. */
+  private placeChest(): void {
+    const spot = this.crypt.chest;
+    const object = new THREE.Group();
+    const piece = this.assets.piece('chest_gold');
+    piece.traverse((o) => {
+      o.castShadow = true;
+      o.receiveShadow = true;
+    });
+    object.add(piece);
+    object.position.copy(spot.position);
+    object.rotation.y = spot.facing;
+    this.scene.add(object);
+    const p = spot.position;
+    const box = { minX: p.x - 0.8, maxX: p.x + 0.8, minZ: p.z - 0.55, maxZ: p.z + 0.55 };
+    this.crypt.colliders.boxes.push(box);
+    this.chest = { object, box, position: p.clone(), opened: false };
+    this.nav = new NavGrid(this.crypt.colliders);
+  }
+
+  private updateChest(): void {
+    const chest = this.chest;
+    if (!chest || chest.opened) return;
+    const near = chest.position.distanceTo(this.hero.position) < 2.2;
+    const ready = this.step === 'cleared';
+    if (ready && Math.random() < 0.3) {
+      this.glow.spawn({ x: chest.position.x + (Math.random() - 0.5) * 1.4, y: 0.6 + Math.random() * 0.6, z: chest.position.z + (Math.random() - 0.5) * 0.8, vy: 1, life: 0.9, size: 0.1, sizeEnd: 0.01, color: this.gold, intensity: 3 });
+    }
+    if (!near) return;
+    if (!ready) {
+      this.tip('chest-locked', 'A treasure chest! It opens once the hall is cleared.');
+      return;
+    }
+    chest.opened = true;
+    this.audio.play('chest');
+    this.shake(0.2);
+    this.burst(chest.position.clone().setY(1.2), this.gold, 70, 5);
+    chest.object.scale.set(1.15, 0.85, 1.15);
+    this.later(0.15, () => chest.object.scale.setScalar(1));
+    const out = chest.position.z > 0 ? -1 : 1;
+    this.dropCoins(chest.position.clone().add(new THREE.Vector3(0, 0, out)), 12 + this.level * 4);
+    if (Math.random() < 0.6) this.later(0.4, () => this.dropPotion(chest.position.clone().add(new THREE.Vector3(1.4, 0, out * 1.2))));
+    this.floatAt(chest.position, 2, 'Treasure!', 'crit');
+  }
+
+  /** Coins spill out, bounce, then fly to the hero when close (no chasing them around). */
+  private dropCoins(at: THREE.Vector3, count: number): void {
+    for (let i = 0; i < count; i++) {
+      const mesh = new THREE.Mesh(this.coinGeometry, this.coinMaterial);
+      mesh.castShadow = true;
+      mesh.position.set(at.x, 0.8, at.z);
+      const a = Math.random() * Math.PI * 2;
+      const sp = 1.5 + Math.random() * 2.5;
+      this.scene.add(mesh);
+      this.coinsOnFloor.push({ mesh, velocity: new THREE.Vector3(Math.cos(a) * sp, 4 + Math.random() * 2, Math.sin(a) * sp), age: 0 });
+    }
+  }
+
+  private updateCoins(dt: number): void {
+    const hero = this.hero.position;
+    let got = 0;
+    this.coinsOnFloor = this.coinsOnFloor.filter((c) => {
+      c.age += dt;
+      const p = c.mesh.position;
+      const d = Math.hypot(hero.x - p.x, hero.z - p.z);
+      if (c.age > 0.5 && d < 3.2) {
+        const pull = 14 * dt;
+        p.x += (hero.x - p.x) * Math.min(1, pull / Math.max(d, 0.3));
+        p.z += (hero.z - p.z) * Math.min(1, pull / Math.max(d, 0.3));
+        p.y += (1 - p.y) * Math.min(1, dt * 8);
+      } else {
+        c.velocity.y -= 18 * dt;
+        p.addScaledVector(c.velocity, dt);
+        if (p.y < 0.12) {
+          p.y = 0.12;
+          c.velocity.y = Math.abs(c.velocity.y) * 0.35;
+          c.velocity.x *= 0.6;
+          c.velocity.z *= 0.6;
+        }
+        this.crypt.colliders.resolve(p, 0.2);
+      }
+      c.mesh.rotation.set(Math.PI / 2, 0, c.age * 6);
+      if (c.age > 0.5 && d < 0.7) {
+        this.scene.remove(c.mesh);
+        got++;
+        return false;
+      }
+      return true;
+    });
+    if (got) {
+      this.coins += got;
+      this.ui.setCoins(this.coins, true);
+      this.audio.play('coin');
+      this.tip('coins', 'Coins! Collect them for a high score.');
+    }
   }
 
   /** Spike traps: a sharp poke and a hop back if the hero steps on one. */
@@ -1274,6 +1408,7 @@ export class Game {
     this.ui.setQuest(this.level, this.pillars);
     this.ui.objective('Follow the arrow to the golden door');
     this.ui.setBlessings(this.blessings, BLESSINGS);
+    this.ui.setCoins(this.coins, false);
     this.audio.play('start');
     this.burst(hero.position.clone().setY(1.2), new THREE.Color(b.color), 60, 4);
     this.floatAt(hero.position, 2.8, b.name + '!', 'heal');
@@ -1731,7 +1866,7 @@ export class Game {
       this.shake(0.12);
       const chance = (this.difficulty.id === 'easy' ? 0.5 : 0.35) + 0.15 * this.lvl('lucky');
       if (Math.random() < chance) this.later(0.15, () => this.dropPotion(c.position.clone()));
-      else this.burst(c.position.clone().setY(0.8), this.gold, 20, 3);
+      else this.dropCoins(c.position, 3 + Math.floor(Math.random() * 3));
       return false;
     });
     if (broke) this.nav = new NavGrid(this.crypt.colliders);

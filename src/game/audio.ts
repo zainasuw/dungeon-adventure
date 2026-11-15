@@ -20,7 +20,9 @@ export type Sfx =
   | 'defeat'
   | 'click'
   | 'tick'
-  | 'start';
+  | 'start'
+  | 'coin'
+  | 'chest';
 
 export class Audio {
   muted = false;
@@ -156,6 +158,11 @@ export class Audio {
       case 'click':
         this.tone(now, [520, 780], 0.07, 'triangle', 0.09);
         return this.click(now, 2400);
+      case 'coin':
+        return this.arp(now, [1568 + Math.random() * 60, 2093], 0.05, 0.07, 0.25);
+      case 'chest':
+        this.thud(now, 120, 0.25, 0.4);
+        return this.arp(now + 0.1, [659, 784, 988, 1319, 1568], 0.07, 0.14, 0.7);
       case 'tick':
         return this.tone(now, [1500 + Math.random() * 200, 1600], 0.03, 'sine', 0.025);
       case 'start':
