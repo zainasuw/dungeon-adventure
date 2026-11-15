@@ -10,6 +10,20 @@ export class CameraRig {
   pitch = THREE.MathUtils.degToRad(54);
   distance = 23;
   readonly focus = new THREE.Vector3();
+  /** How quickly the camera catches up with its target (higher = tighter). */
+  followRate = 5;
+  /**
+   * For the low camera behind the hero: returns how much of the way from the
+   * hero to the camera is clear (0..1), so walls pull the camera in instead of
+   * blocking the view (Roblox's "zoom" occlusion).
+   */
+  occlude: ((from: THREE.Vector3, to: THREE.Vector3) => number) | null = null;
+  private pull = 1;
+  /** 1 when nothing is in the way, smaller when a wall pulls the camera in. */
+  get clearance(): number {
+    return this.pull;
+  }
+  private readonly wanted = new THREE.Vector3();
   /** Keeps the view from drifting too far past the room's walls. */
   bounds = { minX: -8, maxX: 8, minZ: -8.2, maxZ: 7.5 };
 
@@ -49,13 +63,25 @@ export class CameraRig {
     this.yaw = damp(this.yaw, this.goal.yaw, 4, dt);
     this.pitch = damp(this.pitch, this.goal.pitch, 4, dt);
     this.distance = damp(this.distance, this.goal.distance, 4, dt);
-    this.focus.x = damp(this.focus.x, target.x, 5, dt);
-    this.focus.y = damp(this.focus.y, target.y, 5, dt);
-    this.focus.z = damp(this.focus.z, target.z, 5, dt);
+    this.focus.x = damp(this.focus.x, target.x, this.followRate, dt);
+    this.focus.y = damp(this.focus.y, target.y, this.followRate, dt);
+    this.focus.z = damp(this.focus.z, target.z, this.followRate, dt);
     this.clampFocus();
 
     const cp = Math.cos(this.pitch);
     this.offset.set(Math.sin(this.yaw) * cp, Math.sin(this.pitch), Math.cos(this.yaw) * cp).multiplyScalar(this.distance);
+    if (this.occlude) {
+      // Pull in at once when a wall is in the way; ease back out slowly so it doesn't bob.
+      this.wanted.copy(this.focus).add(this.offset);
+      const clear = Math.max(0.18, this.occlude(this.focus, this.wanted));
+      this.pull = clear < this.pull ? clear : damp(this.pull, clear, 2, dt);
+      // Squeezed by a wall: come in closer AND rise up to look down over the hero,
+      // instead of pressing against the back of their head.
+      const lift = (1 - this.pull) * this.distance * 0.6;
+      this.offset.x *= this.pull;
+      this.offset.z *= this.pull;
+      this.offset.y += lift;
+    } else this.pull = 1;
     this.camera.position.copy(this.focus).add(this.offset);
     this.camera.lookAt(this.focus);
 

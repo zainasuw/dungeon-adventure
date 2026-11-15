@@ -211,6 +211,38 @@ export class Game {
   private lineup: Hero[] = [];
   private chosen = 0;
   private camX = 0;
+  private shoulder = 1.5;
+  /** 'behind': low camera behind the hero (default). 'top': the high view from above. V switches. */
+  private camStyle: 'behind' | 'top' = (() => {
+    try {
+      return localStorage.getItem('dungeon-adventure:camera') === 'top' ? 'top' : 'behind';
+    } catch {
+      return 'behind';
+    }
+  })();
+  private readonly occludeFn = (from: THREE.Vector3, to: THREE.Vector3): number => {
+    const c = this.crypt.colliders;
+    const dx = to.x - from.x;
+    const dz = to.z - from.z;
+    const len = Math.hypot(dx, dz);
+    if (len < 0.01) return 1;
+    // Only walls and the room's edge pull the camera in; small things (crates, crystals,
+    // braziers, pillars) are faded by the see-through effect instead.
+    // Walls are long and thin; the altar and props are not.
+    const big = c.boxes.filter((b) => {
+      const w = b.maxX - b.minX;
+      const d = b.maxZ - b.minZ;
+      return Math.max(w, d) > 2.2 && Math.min(w, d) < 1.3;
+    });
+    const b0 = c.bounds;
+    for (let d = 0.6; d <= len; d += 0.25) {
+      const x = from.x + (dx / len) * d;
+      const z = from.z + (dz / len) * d;
+      const out = x < b0.minX || x > b0.maxX || z < b0.minZ || z > b0.maxZ || (c.areas !== null && !c.areas.some((a) => x >= a.minX - 0.6 && x <= a.maxX + 0.6 && z >= a.minZ - 0.6 && z <= a.maxZ + 0.6));
+      if (out || big.some((b) => x > b.minX && x < b.maxX && z > b.minZ && z < b.maxZ)) return Math.max(0, (d - 0.5) / len);
+    }
+    return 1;
+  };
   private spin = 0;
   private lastDrag = -10;
   /** Seconds left of the swoop from the menu into the hall; input waits. */
@@ -1715,18 +1747,23 @@ export class Game {
    * "Hor+": on a narrow screen (a phone held upright) the lens widens so you
    * still see as much of the room from side to side as on a wide screen.
    */
-  private fovFor(base: number): number {
+  private fovFor(base: number, cap = 62): number {
     const aspect = this.camera.aspect;
     const ref = 1.4;
     if (aspect >= ref) return base;
     const half = THREE.MathUtils.degToRad(base / 2);
     const wide = Math.atan(Math.tan(half) * ref);
     const v = THREE.MathUtils.radToDeg(2 * Math.atan(Math.tan(wide) / aspect));
-    return Math.min(v, 62);
+    return Math.min(v, cap);
   }
 
   private updateCamera(dt: number, t: number): void {
-    const playFov = this.fovFor(30);
+    const behind = this.camStyle === 'behind' && this.phase === 'play' && this.establishing <= 0 && this.step !== 'exiting';
+    if (!behind) {
+      this.rig.occlude = null;
+      this.rig.followRate = 5;
+    }
+    const playFov = behind ? this.fovFor(52, 72) : this.fovFor(30);
     if (this.phase !== 'select' && this.phase !== 'title' && this.camera.fov !== playFov) {
       this.camera.fov = THREE.MathUtils.damp(this.camera.fov, playFov, 6, dt);
       if (Math.abs(this.camera.fov - playFov) < 0.05) this.camera.fov = playFov;
@@ -1769,8 +1806,29 @@ export class Game {
         }
         return;
       }
-      // The hall's view, turned and zoomed by the player. Look a little ahead.
       const v = LEVELS[this.level].view;
+      if (this.camStyle === 'behind') {
+        // Low behind the hero at shoulder height, looking ahead, as if you're there.
+        const pitch = THREE.MathUtils.clamp(15 + this.camPitch * 0.7, 4, 48);
+        this.rig.setView(v.yaw + this.camYaw, pitch, 8.6 * this.camZoom);
+        this.rig.bounds = { minX: -999, maxX: 999, minZ: -999, maxZ: 999 };
+        this.rig.followRate = 10;
+        this.rig.occlude = this.occludeFn;
+        this.rig.axes(this.forward, this.right);
+        // Aim a few steps ahead and a little to the right, so the hero stands low and
+        // left of centre and you can see where you're going (over-the-shoulder framing).
+        // In tight corridors there's no room to the side: use only the free space.
+        let side = 0;
+        const hp = this.hero.position;
+        while (side < 1.5 && !this.crypt.colliders.hits(hp.x + this.right.x * (side + 0.5), hp.z + this.right.z * (side + 0.5), 0.35)) side += 0.25;
+        this.shoulder = THREE.MathUtils.damp(this.shoulder, Math.max(0, side - 0.25), 4, dt);
+        const room = this.rig.clearance;
+        this.rig.update(dt, t, this.camTarget.copy(hp).setY(1.2 + 0.55 * room).addScaledVector(this.forward, 2.4 * room).addScaledVector(this.right, this.shoulder * room));
+        return;
+      }
+      this.rig.followRate = 5;
+      this.rig.occlude = null;
+      // The hall's view, turned and zoomed by the player. Look a little ahead.
       this.rig.setView(v.yaw + this.camYaw, THREE.MathUtils.clamp(v.pitch + this.camPitch, 30, 76), v.distance * this.camZoom);
       // Once the player turns or zooms, keep the hero centred anywhere in the room.
       const free = Math.abs(this.camYaw) > 4 || this.camZoom < 0.95 || this.camPan.lengthSq() > 0.5;
@@ -1989,10 +2047,34 @@ export class Game {
     // Turning the camera: hold Q / E, or drag with the middle mouse button. Scroll to zoom.
     // Like Roblox: the left/right arrow keys turn the camera too.
     // Only deliberate turning: Q / E, or a real right-drag (see Input). Arrow keys walk.
+    if (k.keyPressed('KeyV')) {
+      this.camStyle = this.camStyle === 'behind' ? 'top' : 'behind';
+      try {
+        localStorage.setItem('dungeon-adventure:camera', this.camStyle);
+      } catch {
+        // Storage can be off; the choice still works for this visit.
+      }
+      this.camPitch = 0;
+      this.ui.hint(this.camStyle === 'behind' ? 'Camera: <b>behind your hero</b>. Press <kbd>V</kbd> to switch.' : 'Camera: <b>view from above</b>. Press <kbd>V</kbd> to switch.', 2.5);
+    }
     const turn = (k.key('KeyQ') ? 1 : 0) - (k.key('KeyE') ? 1 : 0) - k.look.x;
     // Dragging with the right (or middle) button up and down tilts the view (or a controller's right stick).
     this.camPitch = THREE.MathUtils.clamp(this.camPitch + k.dragY * 0.25 + k.look.y * 50 * this.lastDt, -22, 26);
     this.camYaw += turn * 90 * this.lastDt - k.dragX * 0.3;
+    // Behind the hero: when walking forward, the view eases round behind them, slowly
+    // (Zelda-style). It never swings when you walk sideways or back, so it can't spin.
+    if (this.camStyle === 'behind' && !turn && !k.dragX && move.lengthSq() > 0.2) {
+      const ahead = move.dot(this.forward) / Math.sqrt(move.lengthSq());
+      // Only when walking almost straight ahead: diagonal walking would otherwise run in circles.
+      if (ahead > 0.92) {
+        const v = LEVELS[this.level].view;
+        const want = THREE.MathUtils.radToDeg(Math.atan2(move.x, move.z) + Math.PI) - v.yaw;
+        let diff = (want - this.camYaw) % 360;
+        if (diff > 180) diff -= 360;
+        if (diff < -180) diff += 360;
+        this.camYaw += diff * Math.min(1, this.lastDt * 1.6 * ahead);
+      }
+    }
     if (k.wheel) this.camZoom = THREE.MathUtils.clamp(this.camZoom * (1 + k.wheel * 0.05), 0.7, 1.35);
     if (turn || k.dragX) this.tipsShown.add('camera');
     // Look around: hold Tab and W A S D slides the view across the room instead of moving the hero.
