@@ -148,11 +148,23 @@ export function buildDungeon(assets: Assets, embers: Particles, themeIndex: numb
 
   // Room dressing: each room has its own job and look.
   const solid = (name: string, x: number, z: number, rot = 0, scale = 1) => colliders.addObject(kit.single(name, x, 0, z, rot, scale));
-  // Entrance: rubble and old barrels, dark until the torch is lit.
+  // Entrance: you fell in through a hole in the ceiling. Moonlight falls on the rubble;
+  // old bones and a lost adventurer's things tell you this place is old and dangerous.
   solid('barrel_large', -4.4, 24.2);
   solid('barrel_small_stack', 4.3, 24.4, 0.6);
+  kit.instance('rubble_large', 1.8, 0, 24.4, 0.4);
+  kit.instance('rubble_half', -1.6, 0, 24.8, 2.2);
   kit.instance('rubble_half', 4.2, 0, 16.4, 0.8);
   kit.instance('sword_shield_broken', -4, 0, 16.6, 0.5);
+  kit.instance('hw_skull', -4.6, 0, 19.6, 0.7, 0.45);
+  kit.instance('hw_ribcage', -3.6, 0, 20.8, 2.1, 0.55);
+  kit.instance('hw_bone_A', 3.8, 0, 21.2, 0.4, 0.6);
+  kit.instance('hw_skull_candle', 4.6, 0, 18.4, -0.6, 0.5);
+  kit.instance('keyring_hanging', -6, 1.6, 21, QUARTER);
+  const moon = new THREE.SpotLight('#b9cdff', 26, 14, 0.42, 0.6, 1.4);
+  moon.position.set(0, 10, 20.4);
+  moon.target.position.set(0, 0, 20.4);
+  group.add(moon, moon.target);
   // Guard room: weapon racks of broken shields, tables, banners.
   solid('table_long_broken', -6.5, -8.4, 0.05);
   solid('table_long_broken', 6.5, -8.4, -0.05);
@@ -210,7 +222,7 @@ export function buildDungeon(assets: Assets, embers: Particles, themeIndex: numb
     torches,
     altar,
     door,
-    heroStart: new THREE.Vector3(0, 0, 22),
+    heroStart: new THREE.Vector3(0, 0, 20.4),
     dormant: [
       { position: new THREE.Vector3(-5, 0, -29), facing: 0.6 },
       { position: new THREE.Vector3(5, 0, -29.5), facing: -0.6 },

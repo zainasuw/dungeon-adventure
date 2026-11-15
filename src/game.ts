@@ -18,6 +18,7 @@ import { buildCrypt, type Crypt } from './world/crypt';
 import type { Encounter } from './world/dungeon';
 import { NavGrid } from './world/nav';
 import { Particles } from './world/particles';
+import { Bats } from './world/bats';
 
 type Phase = 'title' | 'select' | 'play' | 'dead' | 'victory';
 /** Steps inside one hall. */
@@ -182,6 +183,8 @@ export class Game {
   private brazier: { position: THREE.Vector3; lit: boolean; light: THREE.PointLight } | null = null;
   private dark = 0;
   private dropSpeed = 0;
+  private readonly bats = new Bats();
+  private stepTimer = 0;
   /** The opening torch has been lit this quest (restarts don't go dark again). */
   private openingDone = false;
   private brazierSwaps: { mesh: THREE.Mesh; lit: THREE.Material }[] = [];
@@ -207,6 +210,8 @@ export class Game {
   private readonly white = new THREE.Color('#ffffff');
   private readonly woodColor = new THREE.Color('#a0703f');
   private readonly fireColor = new THREE.Color('#ff8a2a');
+  private readonly smokeColor = new THREE.Color('#5a5560');
+  private readonly moonDust = new THREE.Color('#bcd0ff');
   private heartTexture: THREE.Texture | null = null;
   private readonly gold = new THREE.Color('#ffc35a');
   private readonly red = new THREE.Color('#ff4040');
@@ -270,7 +275,7 @@ export class Game {
     for (const material of assets.kitMaterials) applySeeThrough(material);
     for (const material of assets.outdoorMaterials) applySeeThrough(material);
     this.crypt = buildCrypt(assets, this.glow, 0);
-    this.scene.add(this.crypt.group, this.glow.points, this.dust.points);
+    this.scene.add(this.crypt.group, this.glow.points, this.dust.points, this.bats.group);
     this.nav = new NavGrid(this.crypt.colliders);
     this.arrow = this.makeArrow();
     this.scene.add(this.arrow);
@@ -752,6 +757,7 @@ export class Game {
     this.crypt.torches.lit = 1;
     this.dark = 0;
     this.coinsOnFloor = [];
+    this.bats.clear();
     this.boss = null;
     this.ui.bossBar(null, 0);
     if (this.chest) {
@@ -1105,6 +1111,20 @@ export class Game {
     this.updateZones(dt);
     this.collectPickups();
     this.updateHazards(dt);
+    this.bats.update(dt, this.time, this.crypt.center, this.crypt.halfX, this.crypt.halfZ);
+    // Dust drifting down through the moonlight where the hero fell in.
+    if (this.crypt.connected && Math.random() < 0.5) {
+      const h = this.crypt.heroStart;
+      this.glow.spawn({ x: h.x + (Math.random() - 0.5) * 2.4, y: 4 + Math.random() * 3, z: h.z + (Math.random() - 0.5) * 2.4, vy: -0.35, life: 4, size: 0.05, sizeEnd: 0.02, color: this.moonDust, intensity: 1.6 });
+    }
+    // Footsteps while walking.
+    if (hero.state === 'free' && hero.velocity.lengthSq() > 4) {
+      this.stepTimer -= dt;
+      if (this.stepTimer <= 0) {
+        this.stepTimer = 0.34;
+        this.audio.play('step');
+      }
+    }
     this.updateAmbushes();
     this.updateLostTreasure();
     this.updateBrazier(dt);
@@ -1527,8 +1547,9 @@ export class Game {
   private darkenForOpening(): void {
     this.dark = 1;
     this.crypt.torches.lit = 0;
-    const p = this.crypt.heroStart.clone().add(new THREE.Vector3(1.8, 0, -1.6));
-    const light = new THREE.PointLight('#ff9a3c', 0, 7, 2);
+    // Straight ahead of where the hero lands, so it's the first thing you see.
+    const p = this.crypt.heroStart.clone().add(new THREE.Vector3(0, 0, -3.6));
+    const light = new THREE.PointLight('#ff9a3c', 0, 9, 2);
     light.position.copy(p).setY(1.4);
     this.scene.add(light);
     // A standing torch, cold until the hero lights it.
@@ -1550,7 +1571,7 @@ export class Game {
     this.brazierSwaps = swaps;
     torch.add(model);
     torch.position.copy(p);
-    torch.scale.setScalar(1.3);
+    torch.scale.setScalar(1.9);
     light.add(torch);
     torch.position.set(0, -1.4, 0);
     this.brazier = { position: p, lit: false, light };
@@ -1564,9 +1585,12 @@ export class Game {
     const t = this.time;
     const near = b.position.distanceTo(this.hero.position) < 2.4;
     if (!b.lit) {
-      // Unlit: no fire, just a faint cold light so you can see where it stands.
-      b.light.color.set('#9fb4ff');
-      b.light.intensity = 3.2;
+      // Unlit: no flame, but warm embers smoulder in it. The warmest, brightest thing in the
+      // dark room, so the eye goes straight to it (warm light leads the player).
+      b.light.color.set('#ff6a1f');
+      b.light.intensity = 4.5 + Math.sin(t * 2.3) * 1.2 + Math.sin(t * 7.1) * 0.6;
+      if (Math.random() < 0.35) this.glow.spawn({ x: b.position.x + (Math.random() - 0.5) * 0.4, y: 1.3, z: b.position.z + (Math.random() - 0.5) * 0.4, vy: 0.5 + Math.random() * 0.5, vx: (Math.random() - 0.5) * 0.2, life: 1.1, size: 0.07, sizeEnd: 0.01, color: this.fireColor, intensity: 3 });
+      if (Math.random() < 0.12) this.dust.spawn({ x: b.position.x, y: 1.7, z: b.position.z, vy: 0.5, vx: (Math.random() - 0.5) * 0.2, life: 2.2, size: 0.25, sizeEnd: 0.8, color: this.smokeColor, intensity: 0.35, drag: 0.4 });
       if (near) this.tip('torch', 'Press <kbd>F</kbd> to light the torch', 8);
       if (near && (this.input.keyPressed('KeyF') || this.input.keyPressed('KeyJ') || this.input.buttonPressed(0))) {
         b.lit = true;
@@ -1595,7 +1619,7 @@ export class Game {
   /** Dims the room's ambient light by `this.dark` (0 = normal). */
   private applyDarkness(): void {
     const m = this.mood;
-    const k = 1 - this.dark * 0.85;
+    const k = 1 - this.dark * 0.62;
     this.hemi.intensity = m.hemi.intensity * k;
     this.moon.intensity = m.moon.intensity * k;
     this.scene.environmentIntensity = m.environment * k;
@@ -2352,7 +2376,11 @@ export class Game {
     this.ui.sweepBars(frame);
 
     if (this.paused) return;
-    if (this.step === 'cleared' && this.crypt.door.isOpen) {
+    if (this.brazier && !this.brazier.lit && this.introTimer <= 0) {
+      // Just under the torch, so it never hides behind the goal line at the top.
+      const s = this.toScreen(this.brazier.position, -0.2);
+      this.ui.prompt('<kbd>F</kbd> Light the torch', s.x, s.y + 8);
+    } else if (this.step === 'cleared' && this.crypt.door.isOpen) {
       const s = this.toScreen(this.crypt.doorAt.clone().add(new THREE.Vector3(0, 0, 1.4)), 0.2);
       const next = LEVELS[this.route[this.stage + 1]];
       this.ui.prompt(!next ? 'Escape!' : next.boss ? 'To the King' : 'Next hall', s.x, s.y);

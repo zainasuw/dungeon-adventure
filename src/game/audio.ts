@@ -22,7 +22,8 @@ export type Sfx =
   | 'tick'
   | 'start'
   | 'coin'
-  | 'chest';
+  | 'chest'
+  | 'step';
 
 export class Audio {
   muted = false;
@@ -108,6 +109,46 @@ export class Audio {
       window.setTimeout(bell, 2200 + Math.random() * 3800);
     };
     window.setTimeout(bell, 1500);
+    this.startAmbience();
+  }
+
+  /** A cave you can hear: low wind, water dripping, and now and then a chain clinking. */
+  private startAmbience(): void {
+    const ctx = this.ctx!;
+    const wind = ctx.createBufferSource();
+    wind.buffer = this.noise;
+    wind.loop = true;
+    const band = ctx.createBiquadFilter();
+    band.type = 'lowpass';
+    band.frequency.value = 380;
+    const swell = ctx.createOscillator();
+    const swellGain = ctx.createGain();
+    swell.frequency.value = 0.09;
+    swellGain.gain.value = 160;
+    swell.connect(swellGain).connect(band.frequency);
+    swell.start();
+    const windGain = ctx.createGain();
+    windGain.gain.value = 0.05;
+    wind.connect(band).connect(windGain).connect(this.master!);
+    wind.start();
+    const drip = (): void => {
+      if (!this.muted && ctx.state === 'running') {
+        const at = ctx.currentTime;
+        const f = 900 + Math.random() * 900;
+        this.tone(at, [f, f * 0.55], 0.12, 'sine', 0.035);
+        if (Math.random() < 0.4) this.tone(at + 0.09, [f * 1.2, f * 0.7], 0.08, 'sine', 0.02);
+      }
+      window.setTimeout(drip, 900 + Math.random() * 3200);
+    };
+    const chains = (): void => {
+      if (!this.muted && ctx.state === 'running') {
+        const at = ctx.currentTime;
+        for (let i = 0; i < 4; i++) this.click(at + i * 0.07 + Math.random() * 0.03, 3000 + Math.random() * 2000);
+      }
+      window.setTimeout(chains, 11000 + Math.random() * 16000);
+    };
+    window.setTimeout(drip, 700);
+    window.setTimeout(chains, 6000);
   }
 
   play(name: Sfx): void {
@@ -158,6 +199,8 @@ export class Audio {
       case 'click':
         this.tone(now, [520, 780], 0.07, 'triangle', 0.09);
         return this.click(now, 2400);
+      case 'step':
+        return this.thud(now, 70 + Math.random() * 25, 0.08, 0.06);
       case 'coin':
         return this.arp(now, [1568 + Math.random() * 60, 2093], 0.05, 0.07, 0.25);
       case 'chest':
