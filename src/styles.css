@@ -1,0 +1,212 @@
+:root {
+  --obsidian: #0b0b0e;
+  --glass: rgba(18, 18, 22, 0.85);
+  --gold: #d4af37;
+  --gold-bright: #f3d27a;
+  --gold-dim: #8a7232;
+  --ink: #f4ecd8;
+  --ink-dim: #b9ae96;
+  --cyan: #5ee0ff;
+  --blood: #c8282e;
+  --mana: #2d7fe0;
+  --serif: 'Cinzel', 'Times New Roman', serif;
+  --sans: 'Outfit Variable', 'Segoe UI', system-ui, sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+  overflow: hidden;
+  background: var(--obsidian);
+  color: var(--ink);
+  font-family: var(--sans);
+  -webkit-font-smoothing: antialiased;
+  user-select: none;
+}
+
+#app {
+  position: fixed;
+  inset: 0;
+}
+
+#viewport {
+  position: absolute;
+  inset: 0;
+}
+
+#viewport canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  outline: none;
+  cursor: crosshair;
+}
+
+#ui {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+/* Loading screen */
+.loading {
+  position: absolute;
+  inset: 0;
+  z-index: 10;
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: 18px;
+  padding: 24px;
+  text-align: center;
+  background: radial-gradient(ellipse at 50% 60%, #1a1712 0%, var(--obsidian) 65%);
+  transition: opacity 0.9s ease;
+}
+
+.loading--done {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.loading__title {
+  margin: 0;
+  font-family: var(--serif);
+  font-weight: 700;
+  font-size: clamp(36px, 7vw, 72px);
+  letter-spacing: 0.06em;
+  color: var(--gold-bright);
+  text-shadow: 0 0 28px rgba(212, 175, 55, 0.35);
+}
+
+.loading__bar {
+  width: min(320px, 70vw);
+  height: 2px;
+  background: rgba(212, 175, 55, 0.18);
+  overflow: hidden;
+}
+
+.loading__bar span {
+  display: block;
+  height: 100%;
+  background: linear-gradient(90deg, var(--gold-dim), var(--gold-bright));
+  transform: scaleX(0);
+  transform-origin: left;
+  transition: transform 0.25s ease;
+}
+
+.loading__hint {
+  margin: 0;
+  font-size: 14px;
+  color: var(--ink-dim);
+}
+
+.loading--error .loading__hint {
+  color: #ff8f8f;
+}
+
+/* Look-test panel: compare art-direction options live. */
+.lookdev {
+  position: absolute;
+  left: 16px;
+  bottom: 16px;
+  width: min(380px, calc(100vw - 32px));
+  padding: 14px 16px 12px;
+  pointer-events: auto;
+  background: var(--glass);
+  border: 1px solid rgba(212, 175, 55, 0.45);
+  border-radius: 6px;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.55), inset 0 1px 0 rgba(243, 210, 122, 0.08);
+  backdrop-filter: blur(6px);
+  transition: opacity 0.25s ease, transform 0.25s ease;
+}
+
+.lookdev--hidden {
+  opacity: 0;
+  transform: translateY(8px);
+  pointer-events: none;
+}
+
+.lookdev__title {
+  margin: 0 0 10px;
+  font-family: var(--serif);
+  font-weight: 700;
+  font-size: 13px;
+  letter-spacing: 0.24em;
+  text-transform: uppercase;
+  color: var(--gold-bright);
+}
+
+.lookdev__row {
+  display: grid;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+
+.lookdev__label {
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-dim);
+}
+
+.lookdev kbd {
+  margin-left: 4px;
+  padding: 0 5px;
+  font-family: var(--sans);
+  font-size: 11px;
+  color: var(--ink-dim);
+  border: 1px solid rgba(185, 174, 150, 0.35);
+  border-radius: 3px;
+}
+
+.lookdev__options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.lookdev button {
+  flex: 1 1 auto;
+  padding: 7px 10px;
+  font: 500 13px/1 var(--sans);
+  color: var(--ink);
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(212, 175, 55, 0.22);
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+
+.lookdev button:hover {
+  border-color: rgba(212, 175, 55, 0.6);
+  background: rgba(212, 175, 55, 0.08);
+}
+
+.lookdev button[aria-pressed='true'] {
+  color: #1a1408;
+  background: linear-gradient(180deg, var(--gold-bright), var(--gold));
+  border-color: var(--gold-bright);
+}
+
+.lookdev button:focus-visible {
+  outline: 2px solid var(--gold-bright);
+  outline-offset: 2px;
+}
+
+.lookdev__help {
+  margin: 4px 0 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--ink-dim);
+}
+
+.lookdev__help b {
+  font-weight: 600;
+  color: var(--ink);
+}

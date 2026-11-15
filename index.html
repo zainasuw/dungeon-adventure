@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>The Gilded Crypt</title>
+    <meta name="description" content="A top-down action dungeon crawler. Wake the four pillars, survive the dead, escape through the golden door." />
+    <meta name="theme-color" content="#0b0b0e" />
+  </head>
+  <body>
+    <div id="app">
+      <div id="viewport"></div>
+      <div id="ui"></div>
+      <div id="loading" class="loading" role="status" aria-live="polite">
+        <h1 class="loading__title">The Gilded Crypt</h1>
+        <div class="loading__bar" aria-hidden="true"><span id="loading-fill"></span></div>
+        <p class="loading__hint" id="loading-text">Lighting the torches…</p>
+      </div>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
