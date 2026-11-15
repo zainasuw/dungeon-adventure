@@ -57,7 +57,7 @@ export const LEVELS: Level[] = [
     view: { yaw: 0, pitch: 40, distance: 17 },
     intro: { yaw: -40, pitch: 22, distance: 17, focus: [0, 2.2, 0] },
     pillar: 'Inheritance',
-    hall: 'The Frozen Hall',
+    hall: 'The Frozen Library',
     mood: 0,
     crystal: '#5ee0ff',
     sleepers: ['skeleton', 'brute', 'runt', 'mage'],
@@ -87,10 +87,43 @@ export const LEVELS: Level[] = [
     potions: [[-12.5, 8], [12.5, 8], [-12.5, -6], [12.5, -6]],
     boss: true,
   },
+  {
+    view: { yaw: 0, pitch: 46, distance: 22 },
+    intro: { yaw: 30, pitch: 24, distance: 26, focus: [0, 1, -2] },
+    pillar: '',
+    hall: 'The Moonlit Graveyard',
+    mood: 6,
+    crystal: '#8fd3ff',
+    sleepers: ['skeleton', 'runt', 'skeleton', 'mage'],
+    waves: [['runt', 'runt', 'skeleton'], ['skeleton', 'mage']],
+    potions: [[-18, -9], [18, 10.5], [0, -11]],
+  },
+  {
+    view: { yaw: 0, pitch: 44, distance: 20 },
+    intro: { yaw: -35, pitch: 26, distance: 22, focus: [0, 1, -1] },
+    pillar: '',
+    hall: 'The Forest Clearing',
+    mood: 7,
+    crystal: '#ffe27a',
+    sleepers: ['runt', 'skeleton', 'runt', 'brute'],
+    waves: [['runt', 'runt', 'runt'], ['skeleton', 'brute']],
+    potions: [[-14, -9], [14, 9], [-3, 11.5]],
+  },
 ];
 
-/** How many halls hold a pillar (the boss room doesn't). */
-export const PILLAR_HALLS = LEVELS.filter((l) => !l.boss).length;
+/** The four pillars, in the order they're won (from the original assignment). */
+export const PILLARS = [
+  { name: 'Abstraction', color: '#ffd166' },
+  { name: 'Encapsulation', color: '#7dff9e' },
+  { name: 'Inheritance', color: '#5ee0ff' },
+  { name: 'Polymorphism', color: '#ff7a3d' },
+];
+
+/** How many halls hold a pillar in one run (then the boss). */
+export const PILLAR_HALLS = PILLARS.length;
+
+/** Scene indexes (into LEVELS) for a run: four pillar halls, then the boss. */
+export const DEFAULT_ROUTE = [0, 5, 2, 6, 4];
 
 export type DifficultyId = 'easy' | 'normal' | 'hard';
 

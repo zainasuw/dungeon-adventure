@@ -9,12 +9,12 @@ import { dampAngle } from './core/math';
 import { Input } from './core/input';
 import { Audio } from './game/audio';
 import { BLESSINGS, rollBlessings, type Blessing, type BlessingLevels } from './game/blessings';
-import { clearSave, DIFFICULTIES, LEVELS, loadSave, MAX_POTIONS, PILLAR_HALLS, writeSave, type Difficulty, type DifficultyId, type SaveData } from './game/levels';
+import { clearSave, DEFAULT_ROUTE, DIFFICULTIES, LEVELS, loadSave, MAX_POTIONS, PILLAR_HALLS, PILLARS, writeSave, type Difficulty, type DifficultyId, type SaveData } from './game/levels';
 import { MOODS, type Mood } from './render/moods';
 import { Renderer } from './render/renderer';
 import { applySeeThrough, seeThrough } from './render/see-through';
 import { HERO_ORDER, Ui, type FloatKind, type QuestStats } from './ui/ui';
-import { buildCrypt, ROOM, type Crypt } from './world/crypt';
+import { buildCrypt, type Crypt } from './world/crypt';
 import { NavGrid } from './world/nav';
 import { Particles } from './world/particles';
 
@@ -107,7 +107,11 @@ export class Game {
   // The quest in progress.
   private heroName = '';
   private difficulty: Difficulty = DIFFICULTIES.easy;
+  /** The scene being played (index into LEVELS). */
   private level = 0;
+  /** The scenes of this run, in order, and how far along we are. */
+  private route: number[] = [...DEFAULT_ROUTE];
+  private stage = 0;
   private pillars = 0;
   private potions = 1;
   private levelStartPotions = 1;
@@ -236,6 +240,7 @@ export class Game {
     this.scene.add(this.hemi, this.moon, this.moon.target, this.heroLight);
 
     for (const material of assets.kitMaterials) applySeeThrough(material);
+    for (const material of assets.outdoorMaterials) applySeeThrough(material);
     this.crypt = buildCrypt(assets, this.glow, 0);
     this.scene.add(this.crypt.group, this.glow.points, this.dust.points);
     this.nav = new NavGrid(this.crypt.colliders);
@@ -416,7 +421,9 @@ export class Game {
     this.coins = 0;
     this.heroName = name;
     this.difficulty = DIFFICULTIES[difficulty];
-    this.level = 0;
+    this.route = [...DEFAULT_ROUTE];
+    this.stage = 0;
+    this.level = this.route[0];
     this.pillars = 0;
     this.potions = 1;
     this.kills = 0;
@@ -449,7 +456,7 @@ export class Game {
   private enterPlay(id: HeroClassId): void {
     const i = HERO_ORDER.indexOf(id);
     const stand = this.lineup[i]?.root.visible ? this.lineup[i] : null;
-    const start = stand ? stand.position.clone().setY(0) : new THREE.Vector3(0, 0, 5.4);
+    const start = stand ? stand.position.clone().setY(0) : this.crypt.heroStart.clone();
     const facing = stand ? stand.facing : Math.PI;
     this.setHero(id);
     this.applyBlessings();
@@ -550,10 +557,13 @@ export class Game {
     this.level = index;
     this.clearActors();
     if (this.crypt.theme !== index) this.buildHall(index);
+    // The camera may roam a bigger or smaller room.
+    const c = this.crypt;
+    this.rig.bounds = { minX: -(c.halfX - 8), maxX: c.halfX - 8, minZ: -(c.halfZ - 3.8), maxZ: c.halfZ - 8.4 };
     this.setMood(MOODS[level.mood]);
     this.crypt.altar.reset();
     this.crypt.altar.setDormantColor(level.crystal);
-    this.crypt.door.reset(index);
+    this.crypt.door.reset(this.pillars);
 
     this.crypt.dormant.forEach((spot, i) => {
       const kind = level.sleepers[i];
@@ -575,7 +585,7 @@ export class Game {
     this.hero.invulnerable = 0;
     this.hero.root.visible = true;
     if (start) this.hero.position.copy(start);
-    else this.hero.position.set(0, 0, 5.4);
+    else this.hero.position.copy(this.crypt.heroStart);
     this.hallStart.copy(this.hero.position);
     this.hero.facing = Math.PI;
     this.hero.velocity.set(0, 0, 0);
@@ -583,14 +593,14 @@ export class Game {
     this.renew.left = 0;
     const view = LEVELS[index].view;
     this.rig.setView(view.yaw, view.pitch, view.distance);
-    this.ui.setQuest(index, this.pillars);
+    this.ui.setQuest(index, this.pillars, this.stage);
     this.ui.objective(level.boss ? 'The Skeleton King awakens…' : 'Follow the golden arrow to the altar');
     const delay = intro ? 1.1 : 0;
     this.later(delay + 2.6, () => this.tip('walk', 'Walk with <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> or the arrow keys'));
     if (level.boss) this.startBossFight(intro ? 2.4 : 0.8);
     const banner = level.boss
       ? () => this.ui.banner('Final battle', level.hall, 'Defeat the Skeleton King to escape!')
-      : () => this.ui.banner(`Hall ${index + 1} of ${PILLAR_HALLS}`, level.hall, `Guarding the Pillar of ${level.pillar}`);
+      : () => this.ui.banner(`Hall ${this.stage + 1} of ${PILLAR_HALLS}`, level.hall, `Guarding the Pillar of ${PILLARS[this.stage]?.name}`);
     if (intro) this.later(delay, banner);
     else banner();
     this.ui.fade(false);
@@ -752,17 +762,17 @@ export class Game {
   private onCleared(): void {
     this.step = 'cleared';
     if (LEVELS[this.level].boss) return this.onBossDefeated();
-    this.pillars = Math.max(this.pillars, this.level + 1);
+    this.pillars = Math.max(this.pillars, this.stage + 1);
     this.crypt.door.setProgress(this.pillars);
     this.crypt.door.open();
-    this.ui.setQuest(this.level, this.pillars);
+    this.ui.setQuest(this.level, this.pillars, this.stage);
     this.audio.play('clear');
     this.later(0.6, () => this.audio.play('door'));
     const last = this.pillars >= PILLAR_HALLS;
     const left = PILLAR_HALLS - this.pillars;
     this.ui.banner(
       `Pillar ${this.pillars} of ${PILLAR_HALLS}`,
-      `Pillar of ${LEVELS[this.level].pillar}`,
+      `Pillar of ${PILLARS[this.stage]?.name}`,
       last ? 'All four pillars! The way to the Skeleton King is open' : `${left} more to go! Follow the arrow to the door`,
     );
     this.later(2.5, () => this.crypt.altar.settle());
@@ -795,7 +805,7 @@ export class Game {
     const before = this.walkout;
     this.walkout += dt;
     hero.position.x = THREE.MathUtils.damp(hero.position.x, 0, 6, dt);
-    hero.position.z = Math.max(-12.2, hero.position.z - 4.6 * dt);
+    hero.position.z = Math.max(-this.crypt.halfZ - 0.2, hero.position.z - 4.6 * dt);
     hero.facing = dampAngle(hero.facing, Math.PI, 10, dt);
     hero.animator.play('Running_A', { fade: 0.15 });
     if (Math.random() < 0.5) this.glow.spawn({ x: (Math.random() - 0.5) * 3, y: 0.3 + Math.random() * 2.5, z: hero.position.z - 2 - Math.random() * 3, vz: 1.5, life: 1, size: 0.1, sizeEnd: 0.01, color: this.gold, intensity: 3 });
@@ -803,11 +813,12 @@ export class Game {
     if (this.walkout > 0.4) this.crypt.door.flare(Math.min(1, (this.walkout - 0.4) / 0.6));
     if (before < 0.85 && this.walkout >= 0.85) this.ui.fade(true, true);
     if (before < 1.45 && this.walkout >= 1.45) {
-      if (this.level === LEVELS.length - 1) {
+      if (this.stage >= this.route.length - 1) {
         this.win();
         return;
       }
-      this.level += 1;
+      this.stage += 1;
+      this.level = this.route[this.stage];
       this.potions = Math.min(this.maxPotions, this.potions);
       this.setupLevel(this.level, true, undefined, true);
       this.playEstablishingShot();
@@ -1037,7 +1048,7 @@ export class Game {
     if (this.step === 'cleared') {
       this.guideToDoor(dt);
       const p = hero.position;
-      if (this.crypt.door.isOpen && p.z < -10.1 && Math.abs(p.x) < 2.6) this.exitHall();
+      if (this.crypt.door.isOpen && p.z < -this.crypt.halfZ + 1.9 && Math.abs(p.x) < 2.6) this.exitHall();
     }
 
     this.updateArrow(dt);
@@ -1434,7 +1445,7 @@ export class Game {
     chest.object.scale.set(1.15, 0.85, 1.15);
     this.later(0.15, () => chest.object.scale.setScalar(1));
     const out = chest.position.z > 0 ? -1 : 1;
-    this.dropCoins(chest.position.clone().add(new THREE.Vector3(0, 0, out)), 12 + this.level * 4);
+    this.dropCoins(chest.position.clone().add(new THREE.Vector3(0, 0, out)), 12 + this.stage * 4);
     if (Math.random() < 0.6) this.later(0.4, () => this.dropPotion(chest.position.clone().add(new THREE.Vector3(1.4, 0, out * 1.2))));
     this.floatAt(chest.position, 2, 'Treasure!', 'crit');
   }
@@ -1543,7 +1554,7 @@ export class Game {
     this.input.clear();
     this.ui.hideScreen();
     this.ui.setHero(hero.def, this.heroName, hero.maxHp);
-    this.ui.setQuest(this.level, this.pillars);
+    this.ui.setQuest(this.level, this.pillars, this.stage);
     this.ui.objective('Follow the arrow to the golden door');
     this.ui.setBlessings(this.blessings, BLESSINGS);
     this.ui.setCoins(this.coins, false);
@@ -1598,7 +1609,7 @@ export class Game {
     let goal: THREE.Vector3 | null = null;
     let color = '#ffc35a';
     if (this.step === 'explore') goal = this.crypt.altar.position;
-    else if (this.step === 'cleared' && this.crypt.door.isOpen) goal = new THREE.Vector3(0, 0, -11);
+    else if (this.step === 'cleared' && this.crypt.door.isOpen) goal = new THREE.Vector3(0, 0, -this.crypt.halfZ + 1);
     else if (this.step === 'fight') {
       // Only when every monster is far away (or behind the hero), point to the closest.
       const near = this.nearestEnemy(hero.position, 7);
@@ -2038,7 +2049,7 @@ export class Game {
   /** Golden motes drifting from the altar to the open door. */
   private guideToDoor(dt: number): void {
     if (Math.random() > dt * 30) return;
-    const z = -3.5 - Math.random() * 7.5;
+    const z = -3.5 - Math.random() * (this.crypt.halfZ - 4.5);
     this.glow.spawn({ x: (Math.random() - 0.5) * 0.8, y: 0.2, z, vz: -1.6, vy: 0.4, life: 1.2, size: 0.12, sizeEnd: 0.02, color: this.gold, intensity: 3 });
   }
 
@@ -2065,8 +2076,9 @@ export class Game {
 
     if (this.paused) return;
     if (this.step === 'cleared' && this.crypt.door.isOpen) {
-      const s = this.toScreen(new THREE.Vector3(0, 0, -10.6), 0.2);
-      this.ui.prompt(this.level === LEVELS.length - 1 ? 'Escape!' : LEVELS[this.level + 1]?.boss ? 'To the King' : 'Next hall', s.x, s.y);
+      const s = this.toScreen(new THREE.Vector3(0, 0, -this.crypt.halfZ + 1.4), 0.2);
+      const next = LEVELS[this.route[this.stage + 1]];
+      this.ui.prompt(!next ? 'Escape!' : next.boss ? 'To the King' : 'Next hall', s.x, s.y);
     } else {
       this.ui.prompt(null);
     }
@@ -2193,9 +2205,9 @@ export class Game {
     while (this.dustTimer <= 0) {
       this.dustTimer += 0.05;
       this.dust.spawn({
-        x: (Math.random() * 2 - 1) * (ROOM.halfX - 1),
+        x: (Math.random() * 2 - 1) * (this.crypt.halfX - 1),
         y: 0.4 + Math.random() * 3.6,
-        z: (Math.random() * 2 - 1) * (ROOM.halfZ - 1),
+        z: (Math.random() * 2 - 1) * (this.crypt.halfZ - 1),
         vx: (Math.random() - 0.5) * 0.12,
         vy: (Math.random() - 0.3) * 0.08,
         vz: (Math.random() - 0.5) * 0.12,

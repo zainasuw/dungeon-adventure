@@ -21,6 +21,8 @@ export class Assets {
   readonly skeletonClips = new Map<string, THREE.AnimationClip>();
   /** Materials of the dungeon kit (walls, floors, props), patched for see-through. */
   readonly kitMaterials = new Set<THREE.Material>();
+  /** Materials of the outdoor kit: see-through, but not tinted like dungeon stone. */
+  readonly outdoorMaterials = new Set<THREE.Material>();
 
   private readonly kit = new Map<string, THREE.Object3D>();
   private readonly weapons = new Map<string, THREE.Object3D>();
@@ -33,8 +35,9 @@ export class Assets {
     const url = (file: string) => `${import.meta.env.BASE_URL}models/${file}`;
     const names = [...HERO_MODELS, ...SKELETON_MODELS];
 
-    const [kit, weapons, heroAnims, skeletonAnims, ...characters] = await Promise.all([
+    const [kit, outdoor, weapons, heroAnims, skeletonAnims, ...characters] = await Promise.all([
       loader.loadAsync(url('dungeon-kit.glb')),
+      loader.loadAsync(url('outdoor-kit.glb')),
       loader.loadAsync(url('weapons.glb')),
       loader.loadAsync(url('hero-anims.glb')),
       loader.loadAsync(url('skeleton-anims.glb')),
@@ -44,6 +47,11 @@ export class Assets {
     for (const child of kit.scene.children) this.kit.set(child.name, child);
     kit.scene.traverse((o) => {
       if (o instanceof THREE.Mesh) this.kitMaterials.add(o.material as THREE.Material);
+    });
+    // Outdoor pieces (graveyard, forest, castle) are named hw_* and hx_*.
+    for (const child of outdoor.scene.children) this.kit.set(child.name, child);
+    outdoor.scene.traverse((o) => {
+      if (o instanceof THREE.Mesh) this.outdoorMaterials.add(o.material as THREE.Material);
     });
     for (const child of weapons.scene.children) this.weapons.set(child.name, child);
     for (const clip of heroAnims.animations) this.heroClips.set(clip.name, inPlace(clip));

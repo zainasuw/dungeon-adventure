@@ -33,6 +33,10 @@ export interface Crypt {
   crateSpots: THREE.Vector3[];
   /** Where the hall's treasure chest stands, and which way it faces. */
   chest: { position: THREE.Vector3; facing: number };
+  /** Half the room's width (x) and depth (z). */
+  halfX: number;
+  halfZ: number;
+  outdoor: boolean;
 }
 
 const QUARTER = Math.PI / 2;
@@ -62,6 +66,10 @@ interface Theme {
   chest: [number, number, number];
   /** The boss room has no altar in the middle: it's an open arena. */
   noAltar?: boolean;
+  /** Half width and depth. Width must be 12, 16 or 20 so the door sits in the middle. */
+  half?: [number, number];
+  /** Outside: a grass or dirt ground instead of tiles, and fences or trees instead of side walls. */
+  outdoor?: { ground: string; edge: 'fence' | 'trees'; dirt: string[]; dirtChance: number };
 }
 
 const SMALL_PLAIN = ['floor_tile_small', 'floor_tile_small', 'floor_tile_small', 'floor_tile_small_broken_A', 'floor_tile_small_broken_B', 'floor_tile_small_weeds_A', 'floor_tile_small_decorated'];
@@ -150,44 +158,43 @@ const THEMES: Theme[] = [
       }
     },
   },
-  // 3. The Frozen Library: walls of books, rows of shelves making aisles, reading tables.
+  // 3. The Frozen Library: long and narrow, walls of books, shelves making aisles down the room.
   {
+    half: [12, 16],
     floor: { large: 0.55, rocks: 0.05, dirt: 0, small: ['floor_tile_small_decorated', 'floor_tile_small_decorated', 'floor_tile_small', 'floor_tile_small_broken_A'] },
-    north: ['wall_shelves', 'wall_window_closed', 'wall_shelves', 'DOOR', 'wall_shelves', 'wall_window_closed', 'wall_shelves'],
-    west: ['wall_shelves', 'wall_shelves', 'wall_window_closed', 'wall_shelves', 'wall_shelves'],
-    east: ['wall_shelves', 'wall_shelves', 'wall_window_closed', 'wall_shelves', 'wall_shelves'],
+    north: ['wall_shelves', 'wall_window_closed'],
+    west: ['wall_shelves', 'wall_shelves', 'wall_window_closed'],
+    east: ['wall_shelves', 'wall_window_closed', 'wall_shelves'],
     banners: true,
     pillar: 'pillar',
-    pillars: [[-5.5, -8.2], [5.5, -8.2]],
+    pillars: [[-5.5, -11], [5.5, -11]],
     pillarTorches: true,
     dormant: [
-      { position: [-6.5, -4.2], facing: 0.8 },
-      { position: [6.5, -4.5], facing: -0.8 },
-      { position: [-12.5, 0.5], facing: 1.6 },
-      { position: [12.5, 0.2], facing: -1.6 },
+      { position: [-4.5, -6], facing: 0.8 },
+      { position: [4.5, -6.5], facing: -0.8 },
+      { position: [-9.5, 3], facing: 1.6 },
+      { position: [9.5, 3.5], facing: -1.6 },
     ],
-    spawns: [[-4.5, 6.5], [4.5, 6.5], [-12.5, 6.5], [12.5, 6.5], [0, -7]],
+    spawns: [[-4, 11], [4, 11], [-9.5, -11], [9.5, -11], [0, -12]],
     hazards: [],
-    crates: [[-13.4, -6.5], [13.4, -6.5], [-2.6, 9.8], [2.6, 9.8], [-13.4, 3.6], [13.4, 3.6]],
-    chest: [-8.6, -9.9, 0],
+    crates: [[-10, -14], [10, -14], [-10, 13.6], [10, 13.6], [-10, -3], [10, 9]],
+    chest: [-8, -14.1, 0],
     props(kit, solid, torches, _top, block) {
-      // Free-standing bookshelves make two aisles on each side.
-      for (const [x, z] of [[-10, -4.5], [10, -4.5], [-10, 4], [10, 4]]) {
-        const shelf = kit.single('wall_shelves', x, 0, z, 0, 0.8);
-        block(shelf);
+      // Free-standing bookshelves along both sides make aisles down the long room.
+      for (const x of [-7.4, 7.4]) {
+        for (const z of [-7, 0, 7]) block(kit.single('wall_shelves', x, 0, z, x < 0 ? QUARTER : -QUARTER, 0.8));
       }
-      solid('table_long_broken', -6, 6.8, 0);
-      solid('table_long_broken', 6, 6.8, Math.PI);
-      kit.instance('chair', -7.6, 0, 7.8, 0.3);
-      kit.instance('chair', 7.4, 0, 7.6, -0.4);
-      solid('shelf_small_candles', -14.4, -9.6, QUARTER);
-      solid('shelf_small_candles', 14.4, 9.6, -QUARTER);
-      kit.instance('candle_triple', -2.6, 0, -10.6, 0.2);
-      kit.instance('candle_triple', 2.6, 0, -10.6, -0.2);
-      kit.instance('candle_melted', -13.6, 0, 9.8, 0);
-      kit.instance('candle_melted', 13.4, 0, -9.8, 0);
-      kit.instance('coin_stack_medium', 13.4, 0, 8.4, 0.4);
-      for (const [x, z] of [[-6, 6.8], [6, 6.8]]) torches.addCandle(new THREE.Vector3(x, 1.25, z));
+      solid('table_long_broken', -2.6, 12.6, QUARTER);
+      solid('table_long_broken', 2.6, 12.6, QUARTER);
+      kit.instance('chair', -4, 0, 13.4, 0.3);
+      kit.instance('chair', 4, 0, 13.2, -0.4);
+      solid('shelf_small_candles', -10.4, -13.6, QUARTER);
+      solid('shelf_small_candles', 10.4, 13.6, -QUARTER);
+      kit.instance('candle_triple', -2.6, 0, -14.6, 0.2);
+      kit.instance('candle_triple', 2.6, 0, -14.6, -0.2);
+      kit.instance('candle_melted', -10, 0, 9.8, 0);
+      kit.instance('coin_stack_medium', 9.8, 0, -9.4, 0.4);
+      for (const [x, z] of [[-2.6, 12.6], [2.6, 12.6]]) torches.addCandle(new THREE.Vector3(x, 1.25, z));
     },
   },
   // 4. The Ember Deep: a forge. Grated floor, a ring of carved pillars, braziers and spike traps.
@@ -208,7 +215,7 @@ const THEMES: Theme[] = [
     ],
     spawns: [[-12.5, 6.5], [12.5, 6.5], [0, -7.5], [-12, -8], [12, -8]],
     hazards: [[-12, -6], [12, -6], [-12, 3.5], [12, 3.5]],
-    crates: [[-9.5, 9.6], [9.5, 9.6], [-14, -1], [14, -1], [-6, -9.8], [6, -9.8]],
+    crates: [[-9, 9.6], [9, 9.6], [-14.4, -1], [14.4, -1], [-6, -10.2], [6, -10.2]],
     chest: [0, 9.6, Math.PI],
     props(kit, solid, torches, top) {
       solid('barrel_large', -14, 10);
@@ -219,6 +226,10 @@ const THEMES: Theme[] = [
       kit.instance('sword_shield_broken', 9.6, 0, -9.8, -0.4);
       kit.instance('coin_stack_large', -1.4, 0, 9.9, 0.4);
       kit.instance('coin_stack_small', 1.5, 0, 10.1, 1.1);
+      // Rubble heaps close off the corners: the forge floor becomes a rough circle.
+      for (const [x, z] of [[-13.2, -8.8], [13.2, -8.8], [-13.2, 8.8], [13.2, 8.8], [-10.6, -10.2], [10.6, -10.2], [-14.4, -6.2], [14.4, -6.2]]) {
+        solid('rubble_large', x, z, (x * z) % 3);
+      }
       // Braziers: free-standing fires at the corners of the altar ring.
       for (const [x, z] of [[-4.6, -3.6], [4.6, -3.6], [-4.6, 3.8], [4.6, 3.8]]) {
         torches.add(top(kit.single('torch_lit', x, 0, z, 0)));
@@ -252,21 +263,110 @@ const THEMES: Theme[] = [
       for (const [x, z] of [[-5, -5], [5, -5], [-5, 5], [5, 5]]) torches.add(top(kit.single('torch_lit', x, 0, z, 0)));
     },
   },
+  // 6. The Moonlit Graveyard: outside under the moon, rows of graves, dead trees, a crypt.
+  {
+    half: [20, 14],
+    outdoor: { ground: '#25301f', edge: 'fence', dirt: ['hw_path_A', 'hw_path_B', 'hw_path_C'], dirtChance: 0.14 },
+    floor: { large: 0, rocks: 0, dirt: 0, small: [] },
+    north: ['wall_cracked', 'wall', 'wall_broken', 'wall_arched'],
+    west: [],
+    east: [],
+    banners: false,
+    pillar: '',
+    pillars: [],
+    pillarTorches: false,
+    dormant: [
+      { position: [-8, -4.5], facing: 0.5 },
+      { position: [8, -5], facing: -0.5 },
+      { position: [-12, 3.2], facing: 1.4 },
+      { position: [12, 3.6], facing: -1.4 },
+    ],
+    spawns: [[-8, 8.5], [8, 8.5], [-16, 0], [16, 0], [0, -8]],
+    hazards: [],
+    crates: [[-18, -4], [18, 4], [-18, 10.5], [-6, 11.5], [6, 11.5]],
+    chest: [-6, -12.1, 0],
+    props(kit, solid, torches, top, block) {
+      // Rows of graves on both sides; the middle stays open.
+      const graves = ['hw_gravestone', 'hw_grave_A', 'hw_grave_B', 'hw_gravemarker_A', 'hw_grave_A_destroyed', 'hw_gravemarker_B'];
+      let g = 0;
+      for (const x of [-15, -11, 11, 15]) {
+        for (const z of [-7, -1.5, 4, 9]) {
+          if ((x === 15 && z < 0) || (x === -15 && z === 9)) continue;
+          solid(graves[g++ % graves.length], x, z, (g % 3) * 0.12 - 0.12);
+        }
+      }
+      block(kit.single('hw_crypt', 15.8, 0, -9.2, -QUARTER, 0.75));
+      for (const [x, z, n] of [[-18.2, -11.5, 'hw_tree_dead_large_decorated'], [-18.4, 6, 'hw_tree_dead_large'], [18.2, 11, 'hw_tree_dead_medium'], [-4.5, -10.8, 'hw_tree_dead_small']] as [number, number, string][]) {
+        solid(n, x, z, x * 0.3);
+      }
+      solid('hw_coffin_decorated', -15, 12, QUARTER);
+      solid('hw_shrine_candles', 6, -12.4, 0);
+      for (const [x, z, n] of [[-3.4, 3.4, 'hw_pumpkin_orange_jackolantern'], [3.4, -3.4, 'hw_pumpkin_yellow_jackolantern'], [-17, -2, 'hw_pumpkin_orange'], [17.4, 7, 'hw_pumpkin_yellow'], [9, 12.4, 'hw_skull_candle'], [-9, -12.6, 'hw_ribcage'], [-12.8, 11.2, 'hw_bone_A']] as [number, number, string][]) {
+        kit.instance(n, x, 0, z, x);
+      }
+      // Lanterns light the paths.
+      for (const [x, z] of [[-4.2, -4.2], [4.2, 4.2], [-7, 6.5], [7, -8.5]]) torches.add(top(kit.single('hw_lantern_standing', x, 0, z, 0)));
+    },
+  },
+  // 7. The Forest Clearing: a sunny clearing ringed by trees, a camp, rocks, and the castle wall with the door.
+  {
+    half: [16, 14],
+    outdoor: { ground: '#4a6b34', edge: 'trees', dirt: ['hw_path_A', 'hw_path_B'], dirtChance: 0.1 },
+    floor: { large: 0, rocks: 0, dirt: 0, small: [] },
+    north: ['wall', 'wall_pillar', 'wall_cracked'],
+    west: [],
+    east: [],
+    banners: true,
+    pillar: '',
+    pillars: [],
+    pillarTorches: false,
+    dormant: [
+      { position: [-6, -5], facing: 0.5 },
+      { position: [6.5, -5.5], facing: -0.5 },
+      { position: [-11.5, 0.5], facing: 1.4 },
+      { position: [11.5, 1], facing: -1.4 },
+    ],
+    spawns: [[-5, 8.5], [5, 8.5], [-13, -9], [13, -9], [0, -9.5]],
+    hazards: [],
+    crates: [[-14, -11.6], [14, -11.6], [-14, 11.4], [14, 11.4], [3.2, 11.6]],
+    chest: [8, -12.1, 0],
+    props(kit, solid, torches, top) {
+      // Clumps of trees inside the clearing.
+      for (const [x, z, n, r] of [[-10, -6.5, 'hx_trees_B_large', 0.4], [10.5, -6.5, 'hx_trees_A_large', 1.8], [-13.5, 5.5, 'hx_trees_A_medium', 2.4], [13.5, 4.5, 'hx_trees_B_medium', 0.9]] as [number, number, string, number][]) {
+        solid(n, x, z, r, 3.2);
+      }
+      for (const [x, z, n, sc] of [[-5.5, 6.2, 'hx_rock_single_A', 2.6], [6.4, 7, 'hx_rock_single_C', 2.4], [-2.6, -8.8, 'hx_rock_single_E', 2.2], [12.8, -1.6, 'hx_rock_single_B', 2.4], [-12.8, -1.4, 'hx_rock_single_D', 2.4]] as [number, number, string, number][]) {
+        solid(n, x, z, x, sc);
+      }
+      // A little camp.
+      solid('hx_tent', -9.5, 9.8, 0.5, 2.6);
+      solid('hx_building_well_blue', 9.6, 9.6, 0.3, 2.4);
+      solid('hx_weaponrack', -14, -4, QUARTER, 2.4);
+      kit.instance('hx_flag_red', -7.6, 0, -11.6, 0, 2.6);
+      kit.instance('hx_flag_blue', 7.6, 0, -11.6, 0, 2.6);
+      kit.instance('hx_sack', -11.2, 0, 11.6, 0.4, 2.4);
+      kit.instance('hx_wheelbarrow', 12.2, 0, 7.2, 2.2, 2.4);
+      torches.add(top(kit.single('torch_lit', -6.6, 0, 9.6, 0)));
+      torches.add(top(kit.single('torch_lit', 6.6, 0, 9.6, 0)));
+    },
+  },
 ];
 
 /** Builds one of the four halls. */
 export function buildCrypt(assets: Assets, embers: Particles, themeIndex = 0): Crypt {
   const theme = THEMES[themeIndex] ?? THEMES[0];
+  const hx = theme.half?.[0] ?? ROOM.halfX;
+  const hz = theme.half?.[1] ?? ROOM.halfZ;
   const group = new THREE.Group();
   group.name = 'crypt';
   const rng = createRng(1337 + themeIndex * 101);
   const kit = new KitPlacer(assets, group);
   const wallInset = 0.5;
   const colliders = new Colliders({
-    minX: -ROOM.halfX + wallInset,
-    maxX: ROOM.halfX - wallInset,
-    minZ: -ROOM.halfZ + wallInset,
-    maxZ: ROOM.halfZ - wallInset,
+    minX: -hx + wallInset,
+    maxX: hx - wallInset,
+    minZ: -hz + wallInset,
+    maxZ: hz - wallInset,
   });
 
   const hazards = theme.hazards.map(([x, z]) => ({ x, z, half: 1.7 }));
@@ -274,10 +374,23 @@ export function buildCrypt(assets: Assets, embers: Particles, themeIndex = 0): C
 
   // Floor: 4x4 tiles in the hall's own mix.
   const f = theme.floor;
-  for (let i = 0; i < 8; i++) {
-    for (let j = 0; j < 6; j++) {
-      const x = -14 + i * 4;
-      const z = -10 + j * 4;
+  const out = theme.outdoor;
+  if (out) {
+    // Outside: one big ground under everything, with patches of dirt and paths.
+    const ground = new THREE.Mesh(new THREE.PlaneGeometry(hx * 2 + 60, hz * 2 + 60), new THREE.MeshStandardMaterial({ color: out.ground, roughness: 1 }));
+    ground.rotation.x = -Math.PI / 2;
+    ground.position.y = -0.02;
+    ground.receiveShadow = true;
+    group.add(ground);
+  }
+  for (let i = 0; i < hx / 2; i++) {
+    for (let j = 0; j < hz / 2; j++) {
+      const x = -hx + 2 + i * 4;
+      const z = -hz + 2 + j * 4;
+      if (out) {
+        if (rng() < out.dirtChance) kit.instance(pick(rng, out.dirt), x, 0, z, Math.floor(rng() * 4) * QUARTER, 1, false);
+        continue;
+      }
       const r = rng();
       const rot = Math.floor(rng() * 4) * QUARTER;
       if (isHazard(x, z)) kit.instance('floor_tile_big_spikes', x, 0, z, 0, 1, false);
@@ -295,41 +408,67 @@ export function buildCrypt(assets: Assets, embers: Particles, themeIndex = 0): C
 
   // Walls: front faces point into the room. The near wall is a low ledge so it never hides the hero.
   let doorway: THREE.Group | null = null;
-  theme.north.forEach((name, i) => {
-    const x = -12 + i * 4;
-    if (name === 'DOOR') doorway = kit.single('wall_doorway', x, 0, -ROOM.halfZ, 0);
-    else kit.instance(name, x, 0, -ROOM.halfZ, 0);
-  });
-  for (let i = 0; i < 7; i++) kit.instance('wall_half', -12 + i * 4, 0, ROOM.halfZ, Math.PI);
-  theme.west.forEach((name, i) => kit.instance(name, -ROOM.halfX, 0, -8 + i * 4, QUARTER));
-  theme.east.forEach((name, i) => kit.instance(name, ROOM.halfX, 0, -8 + i * 4, -QUARTER));
-  kit.instance('wall_corner', ROOM.halfX, 0, -ROOM.halfZ, 0);
-  kit.instance('wall_corner', -ROOM.halfX, 0, -ROOM.halfZ, QUARTER);
-  kit.instance('wall_corner', ROOM.halfX, 0, ROOM.halfZ, -QUARTER);
-  kit.instance('wall_corner', -ROOM.halfX, 0, ROOM.halfZ, Math.PI);
+  const across = hx / 2 - 1;
+  const along = hz / 2 - 1;
+  const palette = (list: string[], i: number) => list.filter((n) => n !== 'DOOR')[i % Math.max(1, list.filter((n) => n !== 'DOOR').length)];
+  for (let i = 0; i < across; i++) {
+    const x = -hx + 4 + i * 4;
+    if (x === 0) doorway = kit.single('wall_doorway', x, 0, -hz, 0);
+    else kit.instance(palette(theme.north, i), x, 0, -hz, 0);
+  }
+  kit.instance('wall_corner', hx, 0, -hz, 0);
+  kit.instance('wall_corner', -hx, 0, -hz, QUARTER);
+  if (!out) {
+    for (let i = 0; i < across; i++) kit.instance('wall_half', -hx + 4 + i * 4, 0, hz, Math.PI);
+    for (let i = 0; i < along; i++) {
+      kit.instance(palette(theme.west, i), -hx, 0, -hz + 4 + i * 4, QUARTER);
+      kit.instance(palette(theme.east, i), hx, 0, -hz + 4 + i * 4, -QUARTER);
+    }
+    kit.instance('wall_corner', hx, 0, hz, -QUARTER);
+    kit.instance('wall_corner', -hx, 0, hz, Math.PI);
+  } else if (out.edge === 'fence') {
+    // An old iron fence on three sides, with dead trees beyond it.
+    for (let i = 0; i < along; i++) {
+      kit.instance(i % 3 === 1 ? 'hw_fence_broken' : 'hw_fence', -hx, 0, -hz + 4 + i * 4, QUARTER);
+      kit.instance(i % 3 === 2 ? 'hw_fence_broken' : 'hw_fence', hx, 0, -hz + 4 + i * 4, -QUARTER);
+    }
+    for (let i = 0; i < across; i++) kit.instance(i === Math.floor(across / 2) ? 'hw_fence_gate' : 'hw_fence', -hx + 4 + i * 4, 0, hz, Math.PI);
+    for (const [x, z] of [[-hx, hz], [hx, hz], [-hx, -hz + 2], [hx, -hz + 2]]) kit.instance('hw_fence_pillar', x, 0, z, 0);
+    for (let k = 0; k < 10; k++) {
+      const side = k % 2 ? 1 : -1;
+      kit.instance(k % 3 ? 'hw_tree_dead_medium' : 'hw_tree_dead_large', side * (hx + 3 + rng() * 4), 0, -hz + 2 + k * (hz * 2 / 10), rng() * 6);
+    }
+  } else {
+    // A wall of trees on both sides; low rocks along the front so the camera sees in.
+    const trees = ['hx_trees_A_large', 'hx_trees_B_large', 'hx_trees_A_medium', 'hx_trees_B_medium'];
+    for (let z = -hz + 1.5; z <= hz; z += 3.6) {
+      for (const side of [-1, 1]) kit.instance(pick(rng, trees), side * (hx + 1.6 + rng() * 1.2), 0, z, rng() * 6, 3.4 + rng() * 0.8);
+    }
+    for (let x = -hx + 2; x <= hx - 2; x += 4.2) kit.instance(pick(rng, ['hx_rock_single_A', 'hx_rock_single_B', 'hx_rock_single_C']), x + rng(), 0, hz + 1 + rng(), rng() * 6, 2 + rng());
+  }
 
   // A short corridor behind the golden door, for walking through to the next hall.
-  for (const z of [-14, -18]) {
+  for (const z of [-hz - 2, -hz - 6]) {
     kit.instance('floor_tile_large', 0, 0, z, 0, 1, false);
-    kit.instance(z === -14 ? 'wall' : 'wall_cracked', -2.5, 0, z, QUARTER);
-    kit.instance(z === -14 ? 'wall_cracked' : 'wall', 2.5, 0, z, -QUARTER);
+    kit.instance(z === -hz - 2 ? 'wall' : 'wall_cracked', -2.5, 0, z, QUARTER);
+    kit.instance(z === -hz - 2 ? 'wall_cracked' : 'wall', 2.5, 0, z, -QUARTER);
   }
   const glowEnd = new THREE.Mesh(
     new THREE.PlaneGeometry(4.2, 4.6),
     new THREE.MeshBasicMaterial({ color: new THREE.Color('#ffd27a').multiplyScalar(2.2), toneMapped: false }),
   );
-  glowEnd.position.set(0, 2.2, -20.05);
+  glowEnd.position.set(0, 2.2, -hz - 8.05);
   group.add(glowEnd);
 
   if (theme.banners) {
-    kit.instance(themeIndex === 2 ? 'banner_triple_blue' : 'banner_patternA_blue', -8, 0, -ROOM.halfZ, 0);
-    kit.instance(themeIndex === 2 ? 'banner_triple_blue' : 'banner_patternA_blue', 8, 0, -ROOM.halfZ, 0);
-    kit.instance('banner_shield_blue', -ROOM.halfX, 0, 0, QUARTER);
-    kit.instance('banner_shield_blue', ROOM.halfX, 0, 0, -QUARTER);
+    kit.instance(themeIndex === 2 ? 'banner_triple_blue' : 'banner_patternA_blue', -8, 0, -hz, 0);
+    kit.instance(themeIndex === 2 ? 'banner_triple_blue' : 'banner_patternA_blue', 8, 0, -hz, 0);
+    kit.instance('banner_shield_blue', -hx, 0, 0, QUARTER);
+    kit.instance('banner_shield_blue', hx, 0, 0, -QUARTER);
   }
 
   const pillars: THREE.Group[] = [];
-  for (const [x, z] of theme.pillars) {
+  for (const [x, z] of theme.pillar ? theme.pillars : []) {
     const pillar = kit.single(theme.pillar, x, 0, z, 0);
     colliders.addObject(pillar, 0.05);
     pillars.push(pillar);
@@ -346,10 +485,12 @@ export function buildCrypt(assets: Assets, embers: Particles, themeIndex = 0): C
 
   // Wall torches on the walls that face the camera.
   const torchSpots: [number, number, number][] = [
-    [-2.0, -15.5, QUARTER], [2.0, -17.5, -QUARTER],
-    [-3.3, -ROOM.halfZ + 0.5, 0], [3.3, -ROOM.halfZ + 0.5, 0],
-    [-ROOM.halfX + 0.5, -4, QUARTER], [-ROOM.halfX + 0.5, 4, QUARTER],
-    [ROOM.halfX - 0.5, -4, -QUARTER], [ROOM.halfX - 0.5, 4, -QUARTER],
+    [-2.0, -hz - 3.5, QUARTER], [2.0, -hz - 5.5, -QUARTER],
+    [-3.3, -hz + 0.5, 0], [3.3, -hz + 0.5, 0],
+    ...(out ? [] : ([
+      [-hx + 0.5, -4, QUARTER], [-hx + 0.5, 4, QUARTER],
+      [hx - 0.5, -4, -QUARTER], [hx - 0.5, 4, -QUARTER],
+    ] as [number, number, number][])),
   ];
   if (theme.pillarTorches) {
     for (const pillar of pillars) {
@@ -376,10 +517,12 @@ export function buildCrypt(assets: Assets, embers: Particles, themeIndex = 0): C
   const runes = new Runes(group);
   const v = (x: number, z: number) => new THREE.Vector2(x, z);
   runes.ring(v(0, 0), 3.05);
-  const doorPath = runes.line(v(0, -3.95), v(0, -10.9), 0.92, 4);
-  runes.line(v(0, 3.95), v(0, 10.7), 0.92, 4);
-  runes.line(v(3.95, 0), v(15.1, 0), 0.92, 4);
-  runes.line(v(-3.95, 0), v(-15.1, 0), 0.92, 4);
+  const doorPath = runes.line(v(0, -3.95), v(0, -hz + 1.1), 0.92, 4);
+  runes.line(v(0, 3.95), v(0, hz - 1.3), 0.92, 4);
+  if (!out) {
+    runes.line(v(3.95, 0), v(hx - 0.9, 0), 0.92, 4);
+    runes.line(v(-3.95, 0), v(-hx + 0.9, 0), 0.92, 4);
+  }
 
   // Keep sleepers and spawn spots off props (nudge toward the middle if needed).
   const free = (x: number, z: number) => {
@@ -396,12 +539,15 @@ export function buildCrypt(assets: Assets, embers: Particles, themeIndex = 0): C
     torches,
     altar,
     door,
-    heroStart: new THREE.Vector3(0, 0, 7.5),
+    heroStart: new THREE.Vector3(0, 0, hz - 6.6),
     dormant: theme.dormant.map((d) => ({ position: free(...d.position), facing: d.facing })),
     spawnPoints: theme.spawns.map(([x, z]) => free(x, z)),
     theme: themeIndex,
     hazards,
     crateSpots: theme.crates.map(([x, z]) => free(x, z)),
     chest: { position: new THREE.Vector3(theme.chest[0], 0, theme.chest[1]), facing: theme.chest[2] },
+    halfX: hx,
+    halfZ: hz,
+    outdoor: !!out,
   };
 }

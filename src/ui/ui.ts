@@ -1,5 +1,5 @@
 import { HERO_CLASSES, type HeroClass, type HeroClassId, type SlotKey } from '../actors/classes';
-import { DIFFICULTIES, LEVELS, MAX_POTIONS, PILLAR_HALLS, type DifficultyId, type SaveData } from '../game/levels';
+import { DIFFICULTIES, LEVELS, MAX_POTIONS, PILLAR_HALLS, PILLARS, type DifficultyId, type SaveData } from '../game/levels';
 import { ICONS, type IconName } from './icons';
 import type { Blessing, BlessingLevels } from '../game/blessings';
 
@@ -530,12 +530,12 @@ export class Ui {
     this.shownHp = -1;
   }
 
-  setQuest(level: number, pillars: number): void {
+  setQuest(level: number, pillars: number, stage = pillars): void {
     const l = LEVELS[level];
-    this.hallEl.textContent = l.boss ? `Final battle · ${l.hall}` : `Hall ${level + 1} of ${PILLAR_HALLS} · ${l.hall}`;
-    this.pillarsEl.innerHTML = LEVELS.filter((x) => !x.boss).map(
-      (lv, i) =>
-        `<span class="pip ${i < pillars ? 'pip--lit' : ''} ${i === level && i >= pillars ? 'pip--now' : ''}" style="--pip:${lv.crystal}" title="Pillar of ${lv.pillar}">${icon(PILLAR_PATH)}</span>`,
+    this.hallEl.textContent = l.boss ? `Final battle · ${l.hall}` : `Hall ${stage + 1} of ${PILLAR_HALLS} · ${l.hall}`;
+    this.pillarsEl.innerHTML = PILLARS.map(
+      (p, i) =>
+        `<span class="pip ${i < pillars ? 'pip--lit' : ''} ${i === stage && i >= pillars ? 'pip--now' : ''}" style="--pip:${p.color}" title="Pillar of ${p.name}">${icon(PILLAR_PATH)}</span>`,
     ).join('');
   }
 
@@ -640,8 +640,8 @@ export class Ui {
   // ───────────────────────── Internals ─────────────────────────
 
   private pillarRow(lit: number): string {
-    return `<div class="pillar-row">${LEVELS.filter((x) => !x.boss).map(
-      (lv, i) => `<span class="pip pip--big ${i < lit ? 'pip--lit' : ''}" style="--pip:${lv.crystal}">${icon(PILLAR_PATH)}<small>${lv.pillar}</small></span>`,
+    return `<div class="pillar-row">${PILLARS.map(
+      (p, i) => `<span class="pip pip--big ${i < lit ? 'pip--lit' : ''}" style="--pip:${p.color}">${icon(PILLAR_PATH)}<small>${p.name}</small></span>`,
     ).join('')}</div>`;
   }
 
