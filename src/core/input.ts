@@ -9,6 +9,11 @@ export class Input {
   dragX = 0;
   /** Scroll wheel movement since the last frame (positive = toward the player = zoom out). */
   wheel = 0;
+  /** Sideways trackpad swipe since the last frame. */
+  swipeX = 0;
+  /** A right-click that wasn't a drag (released after moving less than a few pixels). */
+  rightTap = false;
+  private rightTravel = 0;
 
   private readonly down = new Set<string>();
   private readonly pressed = new Set<string>();
@@ -25,7 +30,9 @@ export class Input {
     target.addEventListener('contextmenu', (e) => e.preventDefault());
     target.addEventListener('wheel', (e) => {
       e.preventDefault();
-      this.wheel += Math.sign(e.deltaY);
+      // Two-finger sideways swipe turns the view; up/down (or pinch) zooms.
+      if (Math.abs(e.deltaX) > Math.abs(e.deltaY)) this.swipeX += e.deltaX;
+      else this.wheel += Math.sign(e.deltaY);
     }, { passive: false });
   }
 
@@ -48,6 +55,7 @@ export class Input {
 
   /** Forgets every held key, e.g. when the hero arrives in a new hall. */
   clear(): void {
+    this.rightTap = false;
     this.reset();
     this.pressed.clear();
     this.buttonsPressed.fill(false);
@@ -57,6 +65,8 @@ export class Input {
   endFrame(): void {
     this.dragX = 0;
     this.wheel = 0;
+    this.swipeX = 0;
+    this.rightTap = false;
     this.pressed.clear();
     this.buttonsPressed.fill(false);
   }
@@ -77,15 +87,18 @@ export class Input {
     if (e.button > 2) return;
     this.buttons[e.button] = true;
     this.buttonsPressed[e.button] = true;
+    if (e.button === 2) this.rightTravel = 0;
     this.target.focus();
   };
 
   private onPointerUp = (e: PointerEvent): void => {
+    if (e.button === 2 && this.buttons[2] && this.rightTravel < 8) this.rightTap = true;
     if (e.button <= 2) this.buttons[e.button] = false;
   };
 
   private onPointerMove = (e: PointerEvent): void => {
-    if (this.buttons[1]) this.dragX += e.movementX;
+    if (this.buttons[1] || this.buttons[2]) this.dragX += e.movementX;
+    if (this.buttons[2]) this.rightTravel += Math.abs(e.movementX) + Math.abs(e.movementY);
     this.updatePointer(e);
   };
 

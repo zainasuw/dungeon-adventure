@@ -25,6 +25,7 @@ const fragmentShader = /* glsl */ `
   uniform float uTime;
   uniform vec3 uColorCore;
   uniform vec3 uColorEdge;
+  uniform float uLit;
   varying vec2 vUv;
   varying float vSeed;
   float hash( vec2 p ) { return fract( sin( dot( p, vec2( 127.1, 311.7 ) ) ) * 43758.5453 ); }
@@ -44,7 +45,7 @@ const fragmentShader = /* glsl */ `
     body *= smoothstep( 0.0, 0.12, p.y ) * ( 1.0 - smoothstep( 0.55, 1.0, p.y + n * 0.35 ) );
     float flame = clamp( body * ( 0.75 + n * 0.6 ), 0.0, 1.0 );
     vec3 color = mix( uColorEdge, uColorCore, smoothstep( 0.35, 0.95, flame ) );
-    gl_FragColor = vec4( color * flame * 2.3, flame );
+    gl_FragColor = vec4( color * flame * 2.3 * uLit, flame * uLit );
   }
 `;
 
@@ -55,6 +56,7 @@ interface Torch {
   /** Candles have no light of their own; the bloom sells them. */
   light: THREE.PointLight | null;
   emberTimer: number;
+  on?: boolean;
 }
 
 /** Wall torches: flame billboards, one flickering light each, rising embers. */
@@ -76,6 +78,7 @@ export class Torches {
         uSize: { value: new THREE.Vector2(0.62, 1.05) },
         uColorCore: { value: new THREE.Color('#ffc46e') },
         uColorEdge: { value: new THREE.Color('#ff4a12') },
+        uLit: { value: 1 },
       },
       vertexShader,
       fragmentShader,
@@ -124,12 +127,21 @@ export class Torches {
     }
   }
 
+  /** 0 = every torch out (dark hall), 1 = all lit. Torches light one by one as it rises. */
+  lit = 1;
+
   update(time: number, dt: number): void {
     this.material.uniforms.uTime.value = time;
+    this.material.uniforms.uLit.value = this.lit;
+    const n = this.torches.length;
+    this.torches.forEach((t, i) => {
+      t.on = this.lit >= 1 || i / n < this.lit;
+    });
     for (const t of this.torches) {
       if (!t.light) continue;
       const flicker = 0.82 + 0.12 * noise1(time * 7 + t.seed) + 0.06 * noise1(time * 19 + t.seed * 3);
-      t.light.intensity = this.baseIntensity * flicker;
+      t.light.intensity = t.on === false ? 0 : this.baseIntensity * flicker;
+      if (t.on === false) continue;
       t.light.position.set(
         t.flame.x + noise1(time * 3 + t.seed) * 0.06,
         t.flame.y + 0.35 + noise1(time * 4 + t.seed * 2) * 0.05,

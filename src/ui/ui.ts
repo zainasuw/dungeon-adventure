@@ -254,7 +254,8 @@ export class Ui {
           ${key('G', 'Special move, or right-click')}
           ${key('Space', 'Dodge')}
           ${key('R', 'Hero power')}
-          ${key('Q / E', 'Turn the camera')}
+          ${key('Q / E', 'Turn the camera (or right-drag, or swipe)')}
+          ${key('Tab', 'Hold to look around the room')}
           ${key('Scroll', 'Zoom in and out')}
           ${key('H', 'Drink a potion')}
           ${key('Esc', 'Pause')}
