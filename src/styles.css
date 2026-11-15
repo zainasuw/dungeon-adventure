@@ -2725,3 +2725,36 @@ body.touch-mode button kbd {
 .bless__text {
   text-wrap: pretty;
 }
+
+/* ───────────── Calmer first-person HUD ───────────── */
+
+/* Attack is the action you use most: make it the biggest button on the bar. */
+.dock .slot[data-slot='0'] {
+  width: 86px;
+  height: 86px;
+  align-self: end;
+  border: 2px solid rgba(243, 210, 122, 0.75);
+}
+
+.dock .slot[data-slot='0'] .slot__icon {
+  font-size: 52px;
+}
+
+/* In the first hall each button says what it does, above it; later halls drop the words. */
+body.learning .dock .slot__name {
+  bottom: calc(100% + 6px);
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(10, 9, 14, 0.72);
+  font-size: 12px;
+  opacity: 1;
+}
+
+body.learning .hint {
+  bottom: 150px;
+}
+
+/* The marker alone shows the way; a distance in metres means little to a young player. */
+.waypoint__label {
+  display: none;
+}

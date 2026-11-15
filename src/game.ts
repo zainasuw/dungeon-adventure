@@ -1814,6 +1814,8 @@ export class Game {
     const showAim = this.firstPerson && !this.paused && !this.choosing && this.establishing <= 0 && this.step !== 'exiting' && this.introTimer <= 0;
     const free = !this.input.touchMode && !this.input.padMode && document.pointerLockElement === null;
     this.ui.crosshair(!showAim ? 'off' : free ? 'click' : 'aim');
+    // Word labels on the action buttons while learning (the first hall), then just icons and keys.
+    document.body.classList.toggle('learning', this.phase === 'play' && this.stage === 0);
     this.updateFirstPersonBody();
     this.updateViewmodel(dt);
     const capture = this.firstPerson && !this.paused && !this.choosing && !this.input.touchMode;
