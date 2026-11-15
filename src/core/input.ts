@@ -16,6 +16,7 @@ export class Input {
   /** A right-click that wasn't a drag (released after moving less than a few pixels). */
   rightTap = false;
   private rightTravel = 0;
+  private dragTravel = 0;
 
   private readonly down = new Set<string>();
   private readonly pressed = new Set<string>();
@@ -32,9 +33,9 @@ export class Input {
     target.addEventListener('contextmenu', (e) => e.preventDefault());
     target.addEventListener('wheel', (e) => {
       e.preventDefault();
-      // Two-finger sideways swipe turns the view; up/down (or pinch) zooms.
-      if (Math.abs(e.deltaX) > Math.abs(e.deltaY)) this.swipeX += e.deltaX;
-      else this.wheel += Math.sign(e.deltaY);
+      // Up/down scroll (or pinch) zooms. Sideways trackpad swipes are ignored: they
+      // turned the view by accident while playing on a laptop.
+      if (Math.abs(e.deltaY) > Math.abs(e.deltaX) && Math.abs(e.deltaY) > 4) this.wheel += Math.sign(e.deltaY);
     }, { passive: false });
   }
 
@@ -91,6 +92,7 @@ export class Input {
     this.buttons[e.button] = true;
     this.buttonsPressed[e.button] = true;
     if (e.button === 2) this.rightTravel = 0;
+    if (e.button === 1 || e.button === 2) this.dragTravel = 0;
     this.target.focus();
   };
 
@@ -101,8 +103,12 @@ export class Input {
 
   private onPointerMove = (e: PointerEvent): void => {
     if (this.buttons[1] || this.buttons[2]) {
-      this.dragX += e.movementX;
-      this.dragY += e.movementY;
+      // Ignore the first few pixels so a click that wobbles doesn't turn the view.
+      this.dragTravel += Math.abs(e.movementX) + Math.abs(e.movementY);
+      if (this.dragTravel > 10) {
+        this.dragX += e.movementX;
+        this.dragY += e.movementY;
+      }
     }
     if (this.buttons[2]) this.rightTravel += Math.abs(e.movementX) + Math.abs(e.movementY);
     this.updatePointer(e);

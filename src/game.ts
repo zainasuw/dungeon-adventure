@@ -657,8 +657,8 @@ export class Game {
       this.ui.objective('It\'s dark… Light the torch');
     }
     const delay = intro ? 1.1 : 0;
-    this.later(delay + 2.6, () => this.tip('walk', 'Walk with <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd>'));
-    this.later(delay + 9, () => this.tip('camera', 'Look around: hold the <b>right mouse button</b> and drag (or use <kbd>←</kbd> <kbd>→</kbd>), scroll to zoom'));
+    this.later(delay + 2.6, () => this.tip('walk', 'Walk with <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> or the arrow keys'));
+    this.later(delay + 9, () => this.tip('camera', 'Look around: right-click and drag, or hold <kbd>Q</kbd> / <kbd>E</kbd>'));
     if (level.boss) this.startBossFight(intro ? 2.4 : 0.8);
     const banner = level.boss
       ? () => this.ui.banner('Final battle', level.hall, 'Defeat the Skeleton King to escape!')
@@ -1217,8 +1217,8 @@ export class Game {
     this.rig.axes(this.forward, this.right);
     if (k.key('KeyW') || k.key('ArrowUp')) move.add(this.forward);
     if (k.key('KeyS') || k.key('ArrowDown')) move.sub(this.forward);
-    if (k.key('KeyD')) move.add(this.right);
-    if (k.key('KeyA')) move.sub(this.right);
+    if (k.key('KeyD') || k.key('ArrowRight')) move.add(this.right);
+    if (k.key('KeyA') || k.key('ArrowLeft')) move.sub(this.right);
     if (move.lengthSq() > 1) move.normalize();
 
     this.raycaster.setFromCamera(k.pointer, this.camera);
@@ -1243,12 +1243,13 @@ export class Game {
     this.heroInput.special = k.keyPressed('KeyR');
     // Turning the camera: hold Q / E, or drag with the middle mouse button. Scroll to zoom.
     // Like Roblox: the left/right arrow keys turn the camera too.
-    const turn = (k.key('KeyQ') || k.key('ArrowLeft') ? 1 : 0) - (k.key('KeyE') || k.key('ArrowRight') ? 1 : 0);
+    // Only deliberate turning: Q / E, or a real right-drag (see Input). Arrow keys walk.
+    const turn = (k.key('KeyQ') ? 1 : 0) - (k.key('KeyE') ? 1 : 0);
     // Dragging with the right (or middle) button up and down tilts the view.
     this.camPitch = THREE.MathUtils.clamp(this.camPitch + k.dragY * 0.25, -22, 26);
-    this.camYaw += turn * 100 * this.lastDt - k.dragX * 0.35 - k.swipeX * 0.25;
-    if (k.wheel) this.camZoom = THREE.MathUtils.clamp(this.camZoom * (1 + k.wheel * 0.08), 0.65, 1.45);
-    if (turn || k.dragX || k.swipeX) this.tipsShown.add('camera');
+    this.camYaw += turn * 90 * this.lastDt - k.dragX * 0.3;
+    if (k.wheel) this.camZoom = THREE.MathUtils.clamp(this.camZoom * (1 + k.wheel * 0.05), 0.7, 1.35);
+    if (turn || k.dragX) this.tipsShown.add('camera');
     // Look around: hold Tab and W A S D slides the view across the room instead of moving the hero.
     this.looking = k.key('Tab');
     if (this.looking) {
