@@ -264,6 +264,7 @@ export class Game {
   private readonly heal = new THREE.Color('#7dffa0');
   private time = 0;
   private last = 0;
+  private lastPad = 0;
   private dustTimer = 0;
 
   // Scratch objects reused every frame.
@@ -352,7 +353,8 @@ export class Game {
       },
       pause: () => this.setPaused(true),
       slot: (code, down) => (down ? this.input.press(code) : this.input.release(code)),
-      isTouch: () => this.input.touchMode,
+      isTouch: () => this.input.touchMode && !this.input.padMode,
+      isPad: () => this.input.padMode,
     });
 
     window.addEventListener('blur', () => {
@@ -1662,6 +1664,8 @@ export class Game {
       dt *= 0.1;
     }
     this.time += dt;
+    this.input.pollGamepad(this.phase !== 'play' || this.paused || this.choosing, Math.min(0.05, (now - (this.lastPad || now)) / 1000));
+    this.lastPad = now;
     this.update(dt);
     this.renderer.render(dt);
     this.input.endFrame();
@@ -1985,9 +1989,9 @@ export class Game {
     // Turning the camera: hold Q / E, or drag with the middle mouse button. Scroll to zoom.
     // Like Roblox: the left/right arrow keys turn the camera too.
     // Only deliberate turning: Q / E, or a real right-drag (see Input). Arrow keys walk.
-    const turn = (k.key('KeyQ') ? 1 : 0) - (k.key('KeyE') ? 1 : 0);
-    // Dragging with the right (or middle) button up and down tilts the view.
-    this.camPitch = THREE.MathUtils.clamp(this.camPitch + k.dragY * 0.25, -22, 26);
+    const turn = (k.key('KeyQ') ? 1 : 0) - (k.key('KeyE') ? 1 : 0) - k.look.x;
+    // Dragging with the right (or middle) button up and down tilts the view (or a controller's right stick).
+    this.camPitch = THREE.MathUtils.clamp(this.camPitch + k.dragY * 0.25 + k.look.y * 50 * this.lastDt, -22, 26);
     this.camYaw += turn * 90 * this.lastDt - k.dragX * 0.3;
     if (k.wheel) this.camZoom = THREE.MathUtils.clamp(this.camZoom * (1 + k.wheel * 0.05), 0.7, 1.35);
     if (turn || k.dragX) this.tipsShown.add('camera');

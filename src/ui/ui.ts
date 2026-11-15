@@ -25,6 +25,8 @@ export interface UiHandlers {
   /** An action button on screen was pressed or let go (touch, or a mouse click on it). */
   slot(code: string, down: boolean): void;
   isTouch(): boolean;
+  /** A game controller is being used: tips name its buttons. */
+  isPad(): boolean;
 }
 
 const SLOT_CODE: Record<SlotKey, string> = { LMB: 'KeyF', RMB: 'KeyG', SPACE: 'Space', Q: 'KeyR' };
@@ -271,7 +273,18 @@ export class Ui {
         </ol>
         <p class="howto__goal">Wake all <b>4 pillars</b>, then beat the <b>Skeleton King</b> to escape!</p>
         ${
-          this.handlers.isTouch()
+          this.handlers.isPad()
+            ? `<div class="keys keys--touch">
+          ${key('Left stick', 'Walk')}
+          ${key('Right stick', 'Turn and tilt the camera')}
+          ${key('A', 'Attack, light, open the shop')}
+          ${key('X', 'Special move')}
+          ${key('B', 'Dodge')}
+          ${key('Y', 'Hero power')}
+          ${key('RB', 'Drink a potion')}
+          ${key('Start', 'Pause')}
+        </div>`
+            : this.handlers.isTouch()
             ? `<div class="keys keys--touch">
           ${key('Left thumb', 'Put it down anywhere on the left and slide to walk')}
           ${key('Tap right side', 'Attack (it aims for you)')}
@@ -559,6 +572,12 @@ export class Ui {
 
   /** On touch screens, tips name the on-screen buttons instead of keys. */
   private forTouch(html: string): string {
+    if (this.handlers.isPad()) {
+      if (html.includes('<kbd>W</kbd>')) return 'Walk with the <b>left stick</b>';
+      if (html.includes('<kbd>Q</kbd>')) return 'Turn the camera with the <b>right stick</b>';
+      const pad: Record<string, string> = { F: 'A', J: 'A', G: 'X', K: 'X', Space: 'B', R: 'Y', H: 'RB' };
+      return html.replace(/<kbd>([A-Za-z]+)<\/kbd>/g, (m, k: string) => (pad[k] ? `<kbd>${pad[k]}</kbd>` : m));
+    }
     if (!this.handlers.isTouch()) return html;
     if (html.includes('<kbd>W</kbd>')) return 'Walk: put your thumb on the <b>left side</b> of the screen and slide it';
     if (html.includes('<kbd>Q</kbd>')) return 'Tap the <b>right side</b> of the screen to attack';
@@ -735,10 +754,14 @@ export class Ui {
       this.promptEl.classList.remove('world-prompt--on');
       return;
     }
-    const key = `${this.handlers.isTouch()}${text}`;
+    const key = `${this.handlers.isTouch()}${this.handlers.isPad()}${text}`;
     if (this.promptEl.dataset.text !== key) {
       this.promptEl.dataset.text = key;
-      this.promptEl.innerHTML = this.handlers.isTouch() ? text.replace(/<kbd>F<\/kbd>/g, '<kbd>Tap</kbd>') : text;
+      this.promptEl.innerHTML = this.handlers.isPad()
+        ? text.replace(/<kbd>F<\/kbd>/g, '<kbd>A</kbd>')
+        : this.handlers.isTouch()
+          ? text.replace(/<kbd>F<\/kbd>/g, '<kbd>Tap</kbd>')
+          : text;
     }
     this.promptEl.style.transform = `translate(${x}px, ${y}px) translate(-50%, 0)`;
     this.promptEl.classList.add('world-prompt--on');

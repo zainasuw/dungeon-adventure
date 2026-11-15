@@ -25,6 +25,13 @@ export class Input {
   /** True once the player has touched the screen; the HUD switches to big thumb buttons. */
   touchMode = false;
   private stickId: number | null = null;
+  /** Right stick of a game controller: turns (x) and tilts (y) the camera. */
+  readonly look = new THREE.Vector2();
+  /** True once a game controller button has been pressed. */
+  padMode = false;
+  private padPrev: boolean[] = [];
+  private padStick = false;
+  private padRepeat = 0;
   private readonly stickOrigin = new THREE.Vector2();
   private readonly stickBase: HTMLElement;
   private readonly stickKnob: HTMLElement;
@@ -76,6 +83,85 @@ export class Input {
 
   buttonPressed(index: number): boolean {
     return this.buttonsPressed[index];
+  }
+
+  /**
+   * Game controllers (Xbox / PlayStation layout, the browser's standard mapping).
+   * In play: left stick walks, right stick turns the camera, A attack, X special,
+   * B dodge, Y power, RB or LB potion, Start pause. In menus: the d-pad or stick
+   * moves between buttons, A presses, B goes back.
+   */
+  pollGamepad(menu: boolean, dt: number): void {
+    const pads = navigator.getGamepads ? navigator.getGamepads() : [];
+    const pad = Array.from(pads).find((p) => p && p.connected && p.mapping === 'standard') ?? Array.from(pads).find((p) => p && p.connected);
+    if (!pad) return;
+    const dead = (v: number) => (Math.abs(v) < 0.18 ? 0 : (v - Math.sign(v) * 0.18) / 0.82);
+    const lx = dead(pad.axes[0] ?? 0);
+    const ly = dead(pad.axes[1] ?? 0);
+    const down = pad.buttons.map((b) => b.pressed);
+    const pressedNow = (i: number) => !!down[i] && !this.padPrev[i];
+    if (down.some(Boolean) || Math.hypot(lx, ly) > 0.5) this.padMode = true;
+
+    if (menu) {
+      this.look.set(0, 0);
+      for (const code of ['KeyF', 'KeyG', 'Space', 'KeyR', 'KeyH', 'Escape']) this.release(code);
+      if (this.stickId === null && this.padStick) {
+        this.stick.set(0, 0);
+        this.padStick = false;
+      }
+      // Moving between buttons: the d-pad, or the stick with a repeat delay.
+      this.padRepeat -= dt;
+      let dir = 0;
+      if (pressedNow(14) || pressedNow(12)) dir = -1;
+      if (pressedNow(15) || pressedNow(13)) dir = 1;
+      if (!dir && this.padRepeat <= 0 && Math.abs(lx) > 0.6) dir = Math.sign(lx);
+      if (!dir && this.padRepeat <= 0 && Math.abs(ly) > 0.6) dir = Math.sign(ly);
+      if (dir) {
+        this.padRepeat = 0.28;
+        this.menuStep(dir, pressedNow(14) || pressedNow(15) || Math.abs(lx) > 0.6);
+      }
+      if (pressedNow(0)) {
+        const el = document.activeElement;
+        if (el instanceof HTMLButtonElement && el.closest('.screen-layer')) el.click();
+        else this.tapKey('Enter', 'Enter');
+      }
+      if (pressedNow(1) || pressedNow(9)) this.tapKey('Escape', 'Escape');
+    } else {
+      if (this.stickId === null) {
+        this.stick.set(lx, -ly);
+        this.padStick = true;
+      }
+      this.look.set(dead(pad.axes[2] ?? 0), dead(pad.axes[3] ?? 0));
+      const map: [number, string][] = [[0, 'KeyF'], [2, 'KeyG'], [1, 'Space'], [3, 'KeyR'], [5, 'KeyH'], [4, 'KeyH'], [9, 'Escape']];
+      for (const [i, code] of map) {
+        if (pressedNow(i)) this.press(code);
+        else if (!down[i] && this.padPrev[i]) this.release(code);
+      }
+    }
+    this.padPrev = down;
+  }
+
+  /** A key press and release for the menus (they listen for keys). */
+  private tapKey(key: string, code: string): void {
+    window.dispatchEvent(new KeyboardEvent('keydown', { key, code }));
+    window.dispatchEvent(new KeyboardEvent('keyup', { key, code }));
+  }
+
+  /** Moves keyboard focus to the next or previous button on the open menu. */
+  private menuStep(dir: number, sideways: boolean): void {
+    const layer = document.querySelector<HTMLElement>('.screen-layer--on');
+    if (!layer) return;
+    // The hero lineup and the title use left/right themselves.
+    if (sideways && (layer.dataset.screen === 'select')) {
+      const k = dir > 0 ? 'ArrowRight' : 'ArrowLeft';
+      this.tapKey(k, k);
+      return;
+    }
+    const buttons = Array.from(layer.querySelectorAll<HTMLButtonElement>('button:not([disabled])')).filter((b) => b.offsetParent !== null);
+    if (!buttons.length) return;
+    const at = buttons.indexOf(document.activeElement as HTMLButtonElement);
+    const next = buttons[(at + dir + buttons.length) % buttons.length] ?? buttons[0];
+    next.focus();
   }
 
   /** Holds a key down from an on-screen button (touch controls). */
