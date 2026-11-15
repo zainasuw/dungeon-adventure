@@ -32,6 +32,8 @@ export class Altar {
   awake = 0;
   private target = 0;
   private charge = 0;
+  private settled = false;
+  private beamLevel = 1;
   private readonly crystal: THREE.Mesh;
   private readonly crystalMaterial: THREE.MeshStandardMaterial;
   private readonly shards: THREE.Mesh[] = [];
@@ -122,8 +124,15 @@ export class Altar {
     this.beam.visible = true;
   }
 
+  /** After the big moment, the light beam calms to a soft glow so it never hides the hero or the door. */
+  settle(): void {
+    this.settled = true;
+  }
+
   /** Back to a dormant crystal for a fresh room. */
   reset(): void {
+    this.settled = false;
+    this.beamLevel = 1;
     this.target = 0;
     this.awake = 0;
     this.charge = 0;
@@ -151,7 +160,8 @@ export class Altar {
     this.crystalMaterial.emissiveIntensity = 1.9 + this.charge * 2.5 + this.awake * 1.2 + Math.sin(time * 3) * 0.3;
     this.light.color.copy(this.color);
     this.light.intensity = 9 + this.charge * 10 + this.awake * 8 + Math.sin(time * 3) * 1.2;
-    this.beamMaterial.uniforms.uStrength.value = this.awake * (0.85 + Math.sin(time * 2.4) * 0.15);
+    this.beamLevel = damp(this.beamLevel, this.settled ? 0.18 : 1, 1.5, dt);
+    this.beamMaterial.uniforms.uStrength.value = this.awake * this.beamLevel * (0.85 + Math.sin(time * 2.4) * 0.15);
     this.beamMaterial.uniforms.uTime.value = time;
   }
 }

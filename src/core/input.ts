@@ -38,6 +38,13 @@ export class Input {
     return this.buttonsPressed[index];
   }
 
+  /** Forgets every held key, e.g. when the hero arrives in a new hall. */
+  clear(): void {
+    this.reset();
+    this.pressed.clear();
+    this.buttonsPressed.fill(false);
+  }
+
   /** Call at the end of every frame. */
   endFrame(): void {
     this.pressed.clear();

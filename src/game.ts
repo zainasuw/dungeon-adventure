@@ -56,7 +56,6 @@ interface Timer {
 }
 
 const REDUCED_MOTION = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-const PLAY_VIEW = { yaw: 0, pitch: 42, distance: 18 };
 const ALTAR_REACH = 3.2;
 /** Where the four heroes stand on the select screen. */
 const LINEUP_X = [-3.375, -1.125, 1.125, 3.375];
@@ -119,6 +118,8 @@ export class Game {
   private lastDrag = -10;
   /** Seconds left of the swoop from the menu into the hall; input waits. */
   private introTimer = 0;
+  /** Seconds left holding a hall's establishing shot before the swoop. */
+  private establishing = 0;
   /** Where the hero began the hall, so the pillar is only taken after the player walks to it. */
   private readonly hallStart = new THREE.Vector3();
   private readonly lineupLight = new THREE.PointLight('#ffffff', 0, 7, 1.6);
@@ -516,7 +517,8 @@ export class Game {
     this.hero.velocity.set(0, 0, 0);
     this.hero.animator.play('Idle', { fade: 0 });
     this.renew.left = 0;
-    this.rig.setView(PLAY_VIEW.yaw, PLAY_VIEW.pitch, PLAY_VIEW.distance);
+    const view = LEVELS[index].view;
+    this.rig.setView(view.yaw, view.pitch, view.distance);
     this.ui.setQuest(index, this.pillars);
     this.ui.objective('Follow the golden arrow to the altar');
     const delay = intro ? 1.1 : 0;
@@ -604,7 +606,13 @@ export class Game {
     this.audio.play('clear');
     this.later(0.6, () => this.audio.play('door'));
     const last = this.level === LEVELS.length - 1;
-    this.ui.banner('Pillar claimed', `Pillar of ${LEVELS[this.level].pillar}`, last ? 'All four pillars are awake!' : `${this.pillars} of 4 pillars awake`);
+    const left = LEVELS.length - this.pillars;
+    this.ui.banner(
+      `Pillar ${this.pillars} of 4`,
+      `Pillar of ${LEVELS[this.level].pillar}`,
+      last ? 'All four pillars! Run for the golden door!' : `${left} more to go! Follow the arrow to the door`,
+    );
+    this.later(2.5, () => this.crypt.altar.settle());
     this.ui.objective(last ? 'The way out is open! Follow the arrow to the golden door' : 'Follow the arrow to the golden door');
     if (this.hero.state === 'free') this.hero.animator.play('Cheer', { loop: false, fade: 0.15, restart: true });
   }
@@ -620,10 +628,29 @@ export class Game {
     this.later(0.8, () => {
       this.level += 1;
       this.potions = Math.min(MAX_POTIONS, this.potions);
-      this.setupLevel(this.level, true);
-      this.rig.snap(this.hero.position);
+      this.setupLevel(this.level, true, undefined, true);
+      this.playEstablishingShot();
       this.saveProgress();
     });
+  }
+
+  /**
+   * Opens a new hall on its own wide shot (each hall has a different angle),
+   * holds it for a moment, then swoops down behind the hero. Held keys are
+   * forgotten so the hero doesn't walk off before the player has looked around.
+   */
+  private playEstablishingShot(): void {
+    const shot = LEVELS[this.level].intro;
+    this.rig.yaw = THREE.MathUtils.degToRad(shot.yaw);
+    this.rig.pitch = THREE.MathUtils.degToRad(shot.pitch);
+    this.rig.distance = shot.distance;
+    this.rig.setView(shot.yaw, shot.pitch, shot.distance);
+    this.rig.focus.set(...shot.focus);
+    this.establishing = 1.3;
+    this.introTimer = 2.4;
+    this.input.clear();
+    this.ui.showHud(false);
+    this.later(2.4, () => this.ui.showHud(true));
   }
 
   private win(): void {
@@ -727,6 +754,17 @@ export class Game {
       this.rig.setView(0, 11, 8.4);
       this.rig.update(dt, t, this.camTarget.set(this.hero.position.x - (wide ? 2.3 : 0), wide ? 1.15 : 1.6, this.hero.position.z));
     } else {
+      if (this.establishing > 0) {
+        this.establishing -= dt;
+        const shot = LEVELS[this.level].intro;
+        this.rig.setView(shot.yaw, shot.pitch, shot.distance);
+        this.rig.update(dt, t, this.camTarget.set(...shot.focus));
+        if (this.establishing <= 0) {
+          const v = LEVELS[this.level].view;
+          this.rig.setView(v.yaw, v.pitch, v.distance);
+        }
+        return;
+      }
       // Look a little ahead (north), where the altar and the door are.
       this.rig.update(dt, t, this.camTarget.copy(this.hero.position).setY(0).add(new THREE.Vector3(0, 0, -1.2)));
     }

@@ -1,7 +1,18 @@
 import type { EnemyKind } from '../actors/enemy';
 import type { HeroClassId } from '../actors/classes';
 
+/** Camera angle in degrees and distance. */
+export interface View {
+  yaw: number;
+  pitch: number;
+  distance: number;
+}
+
 export interface Level {
+  /** The play camera. "Up" always walks toward the door; zoom and tilt vary by hall. */
+  view: View;
+  /** The establishing shot the hall opens on before the camera swoops down to play. */
+  intro: View & { focus: [number, number, number] };
   /** The pillar from the original game that this hall guards. */
   pillar: string;
   hall: string;
@@ -19,6 +30,8 @@ export interface Level {
 
 export const LEVELS: Level[] = [
   {
+    view: { yaw: 0, pitch: 42, distance: 18 },
+    intro: { yaw: 0, pitch: 18, distance: 16, focus: [0, 2, -4] },
     pillar: 'Abstraction',
     hall: 'The Torchlit Hall',
     mood: 1,
@@ -28,6 +41,8 @@ export const LEVELS: Level[] = [
     potions: [[-12.5, 8.5], [12.5, -8.5]],
   },
   {
+    view: { yaw: 0, pitch: 46, distance: 19 },
+    intro: { yaw: 38, pitch: 30, distance: 21, focus: [0, 1, -1] },
     pillar: 'Encapsulation',
     hall: 'The Overgrown Hall',
     mood: 3,
@@ -37,6 +52,8 @@ export const LEVELS: Level[] = [
     potions: [[-13, -8], [13, 8.5]],
   },
   {
+    view: { yaw: 0, pitch: 40, distance: 17 },
+    intro: { yaw: -40, pitch: 22, distance: 17, focus: [0, 2.2, 0] },
     pillar: 'Inheritance',
     hall: 'The Frozen Hall',
     mood: 0,
@@ -46,6 +63,8 @@ export const LEVELS: Level[] = [
     potions: [[-13, 8.5], [13, -8], [0, 10]],
   },
   {
+    view: { yaw: 0, pitch: 48, distance: 20 },
+    intro: { yaw: 180, pitch: 26, distance: 15, focus: [0, 1.5, 2] },
     pillar: 'Polymorphism',
     hall: 'The Ember Deep',
     mood: 4,

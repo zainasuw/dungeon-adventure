@@ -11,7 +11,7 @@ export class CameraRig {
   distance = 23;
   readonly focus = new THREE.Vector3();
   /** Keeps the view from drifting too far past the room's walls. */
-  bounds = { minX: -8, maxX: 8, minZ: -6.5, maxZ: 7.5 };
+  bounds = { minX: -8, maxX: 8, minZ: -8.2, maxZ: 7.5 };
 
   /** Where yaw, pitch and distance are easing toward (camera presets). */
   private readonly goal = { yaw: this.yaw, pitch: this.pitch, distance: this.distance };
