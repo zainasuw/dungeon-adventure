@@ -1004,6 +1004,7 @@ export class Game {
     this.scene.add(mesh);
     this.portals.push({ mesh, at: e.position.clone(), t: 0, size });
     this.audio.play('summon');
+    this.tip('summon', 'A <b>purple circle</b> on the floor means a monster is about to appear there!', 4);
     this.later(Enemy.SUMMON_TIME, () => {
       if (!e.alive) return;
       this.puff(e.position, 18);

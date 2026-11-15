@@ -2758,3 +2758,10 @@ body.learning .hint {
 .waypoint__label {
   display: none;
 }
+
+.howto__more {
+  margin: 0;
+  font: 500 15px/1.6 var(--sans);
+  color: var(--ink-dim);
+  text-align: center;
+}

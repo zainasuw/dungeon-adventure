@@ -296,25 +296,15 @@ export class Ui {
           ${key('Round buttons', 'Special move, dodge, hero power, potion')}
           ${key('Pause', 'The button in the top corner')}
         </div>`
-            : `<div class="keys">
-          ${key('W A S D', 'Walk (arrow keys work too)')}
-          ${key('F', 'Attack, light, open the shop (it aims for you)')}
-          ${key('G', 'Special move, or right-click')}
+            : `<div class="keys keys--touch">
+          ${key('W A S D', 'Walk')}
+          ${key('Mouse', 'Look around (click the game first)')}
+          ${key('F', 'Attack. It aims for you')}
           ${key('Space', 'Dodge')}
-          ${key('R', 'Hero power')}
           ${key('H', 'Drink a potion')}
-          ${key('Right-drag', 'Turn and tilt the camera')}
-          ${key('Q / E', 'Turn the camera')}
-          ${key('Scroll', 'Zoom in and out')}
-          ${key('Tab', 'Hold to look around')}
-          ${key('Esc', 'Pause')}
-        </div>`
+        </div>
+        <p class="howto__more">More: <kbd>G</kbd> special move · <kbd>R</kbd> hero power · <kbd>V</kbd> change the view · <kbd>Esc</kbd> pause</p>`
         }
-        <ul class="howto__tips">
-          <li><b class="tip-red">Red ring</b> on the floor: a skeleton is about to swing. Dodge out!</li>
-          <li><b class="tip-red">Red lane with arrows</b>: a Shield Rammer is about to charge. Step aside, and it bumps into the wall.</li>
-          <li><b class="tip-purple">Purple circle</b>: a monster is about to appear there.</li>
-        </ul>
         <button class="btn btn--primary" data-act="close">Got it</button>
       </div>`,
     );
