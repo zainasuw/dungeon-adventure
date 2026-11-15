@@ -11,7 +11,7 @@ import { clearSave, DIFFICULTIES, LEVELS, loadSave, MAX_POTIONS, writeSave, type
 import { MOODS, type Mood } from './render/moods';
 import { Renderer } from './render/renderer';
 import { applySeeThrough, seeThrough } from './render/see-through';
-import { Ui, type FloatKind, type QuestStats } from './ui/ui';
+import { HERO_ORDER, Ui, type FloatKind, type QuestStats } from './ui/ui';
 import { buildCrypt, ROOM, type Crypt } from './world/crypt';
 import { Particles } from './world/particles';
 
@@ -56,6 +56,9 @@ interface Timer {
 const REDUCED_MOTION = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 const PLAY_VIEW = { yaw: 0, pitch: 42, distance: 18 };
 const ALTAR_REACH = 3.7;
+/** Where the four heroes stand on the select screen. */
+const LINEUP_X = [-3.375, -1.125, 1.125, 3.375];
+const LINEUP_Z = 2.8;
 
 export class Game {
   readonly scene = new THREE.Scene();
@@ -104,6 +107,15 @@ export class Game {
   private readonly tipsShown = new Set<string>();
   private autoPotionCooldown = 0;
   private arrow!: THREE.Mesh;
+
+  // Hero select: all four heroes in a row; the chosen one steps forward and spins.
+  private lineup: Hero[] = [];
+  private chosen = 0;
+  private spin = 0;
+  private lastDrag = -10;
+  private detailsOpen = false;
+  private readonly lineupLight = new THREE.PointLight('#ffffff', 0, 7, 1.6);
+  private lineupRing!: THREE.Mesh;
 
   private readonly hemi = new THREE.HemisphereLight();
   private readonly moon = new THREE.DirectionalLight();
@@ -177,11 +189,24 @@ export class Game {
     this.scene.add(this.crypt.group, this.glow.points, this.dust.points);
     this.arrow = this.makeArrow();
     this.scene.add(this.arrow);
+    this.lineupRing = new THREE.Mesh(
+      new THREE.RingGeometry(0.62, 0.9, 64),
+      new THREE.MeshBasicMaterial({ color: '#ffffff', transparent: true, opacity: 0, depthWrite: false, toneMapped: false }),
+    );
+    this.lineupRing.rotation.x = -Math.PI / 2;
+    this.scene.add(this.lineupRing, this.lineupLight);
 
     this.ui = new Ui(uiRoot, {
       newQuest: () => this.openSelect(),
       continueQuest: () => this.continueQuest(),
       previewHero: (id) => this.previewHero(id),
+      spinHero: (radians) => {
+        this.spin += radians;
+        this.lastDrag = this.time;
+      },
+      detailsOpen: (open) => {
+        this.detailsOpen = open;
+      },
       startQuest: (id, name, difficulty) => this.startQuest(id, name, difficulty),
       backToTitle: () => this.openTitle(),
       resume: () => this.setPaused(false),
@@ -220,6 +245,7 @@ export class Game {
     const save = loadSave();
     this.setupLevel(save ? save.level : 0, false);
     this.hero.root.visible = false;
+    this.showLineup(false);
     this.ui.showTitle(save);
   }
 
@@ -229,22 +255,90 @@ export class Game {
     this.ui.showHud(false);
     this.ui.clearWorldUi();
     this.setupLevel(0, false);
-    this.hero.root.visible = true;
+    this.hero.root.visible = false;
+    this.detailsOpen = false;
+    this.showLineup(true);
     const id = this.hero.def.id;
     this.previewHero(id, false);
     this.ui.showSelect(id, this.heroName, this.difficulty.id);
   }
 
   private previewHero(id: HeroClassId, cheer = true): void {
-    if (this.hero.def.id !== id) this.setHero(id);
-    this.hero.root.visible = true;
-    this.hero.position.set(0, 0, 3.1);
-    this.hero.facing = 0;
-    if (cheer) this.hero.animator.play('Cheer', { loop: false, fade: 0.15, restart: true });
-    this.audio.play('click');
+    this.chosen = HERO_ORDER.indexOf(id);
+    this.spin = 0;
+    const hero = this.lineup[this.chosen];
+    if (cheer && hero) {
+      hero.animator.play('Cheer', { loop: false, fade: 0.15, restart: true });
+      this.burst(hero.position.clone().setY(1.2), new THREE.Color(hero.def.color), 30, 3);
+      this.audio.play('click');
+    }
+  }
+
+  private showLineup(visible: boolean): void {
+    if (visible && this.lineup.length === 0) {
+      this.lineup = HERO_ORDER.map((id) => {
+        const h = new Hero(this.assets, HERO_CLASSES[id]);
+        this.scene.add(h.root);
+        return h;
+      });
+    }
+    this.lineup.forEach((h, i) => {
+      h.root.visible = visible;
+      h.position.set(LINEUP_X[i], 0, LINEUP_Z);
+      h.facing = 0;
+    });
+    this.lineupRing.visible = visible;
+    this.lineupLight.visible = visible;
+  }
+
+  /** Eases the lineup: the chosen hero steps forward onto a glowing ring and turns slowly. */
+  private updateLineup(dt: number): void {
+    if (this.phase !== 'select' || this.lineup.length === 0) return;
+    const tags: { id: HeroClassId; x: number; top: number; bottom: number }[] = [];
+    this.lineup.forEach((h, i) => {
+      const chosen = i === this.chosen;
+      // In step 2 the other heroes step back into the dark.
+      const away = this.detailsOpen && !chosen;
+      const z = LINEUP_Z + (chosen ? 0.5 : away ? -2.4 : 0);
+      h.position.z = THREE.MathUtils.damp(h.position.z, z, 8, dt);
+      const scale = chosen ? 1.06 : 1;
+      h.root.scale.setScalar(THREE.MathUtils.damp(h.root.scale.x, scale, 8, dt));
+      h.root.visible = !away;
+      if (chosen && this.detailsOpen) {
+        // Step 2: turn back to face the player.
+        this.spin = THREE.MathUtils.damp(this.spin, Math.round(this.spin / (Math.PI * 2)) * Math.PI * 2, 5, dt);
+        h.facing = this.spin;
+      } else if (chosen) {
+        if (this.time - this.lastDrag > 1.5) this.spin += dt * 0.7;
+        h.facing = this.spin;
+      } else {
+        h.facing = THREE.MathUtils.damp(h.facing, 0, 6, dt);
+      }
+      if (h.animator.current === 'Cheer' && h.animator.progress >= 1) h.animator.play('Idle', { fade: 0.25 });
+      h.updateVisuals(dt);
+      const feet = this.toScreen(h.position, -0.05);
+      const head = this.toScreen(h.position, 2.4 * scale);
+      tags.push({ id: h.def.id, x: feet.x, top: head.y, bottom: feet.y });
+    });
+    const hero = this.lineup[this.chosen];
+    const color = new THREE.Color(hero.def.color);
+    this.lineupRing.position.set(hero.position.x, 0.03, hero.position.z);
+    (this.lineupRing.material as THREE.MeshBasicMaterial).color.copy(color).multiplyScalar(2);
+    const mat = this.lineupRing.material as THREE.MeshBasicMaterial;
+    mat.opacity = 0.75 + Math.sin(this.time * 3) * 0.15;
+    this.lineupRing.scale.setScalar(1.15 + Math.sin(this.time * 3) * 0.04);
+    this.lineupLight.color.copy(color);
+    this.lineupLight.intensity = 14;
+    this.lineupLight.position.set(hero.position.x, 2.6, hero.position.z + 1.6);
+    if (Math.random() < 0.4) {
+      const a = Math.random() * Math.PI * 2;
+      this.glow.spawn({ x: hero.position.x + Math.sin(a) * 0.8, y: 0.1, z: hero.position.z + Math.cos(a) * 0.8, vy: 1.4, life: 1, size: 0.08, sizeEnd: 0.01, color, intensity: 3 });
+    }
+    this.ui.placeHeroTags(tags);
   }
 
   private startQuest(id: HeroClassId, name: string, difficulty: DifficultyId): void {
+    this.showLineup(false);
     this.heroName = name;
     this.difficulty = DIFFICULTIES[difficulty];
     if (this.hero.def.id !== id) this.setHero(id);
@@ -258,6 +352,7 @@ export class Game {
   }
 
   private continueQuest(): void {
+    this.showLineup(false);
     const save = loadSave();
     if (!save) return this.openSelect();
     this.heroName = save.name;
@@ -519,6 +614,7 @@ export class Game {
     else if (this.phase === 'dead') this.updateDead(dt);
 
     this.hero.updateVisuals(dt);
+    this.updateLineup(dt);
     for (const e of this.enemies) e.updateVisuals(dt);
     this.updateRings();
     if (this.phase === 'select' || this.phase === 'victory') {
@@ -551,10 +647,32 @@ export class Game {
   }
 
   private updateCamera(dt: number, t: number): void {
+    if (this.phase !== 'select' && this.camera.fov !== 30) {
+      this.camera.fov = THREE.MathUtils.damp(this.camera.fov, 30, 6, dt);
+      if (Math.abs(this.camera.fov - 30) < 0.05) this.camera.fov = 30;
+      this.camera.updateProjectionMatrix();
+    }
     if (this.phase === 'title') {
       this.rig.setView(30 + t * 3, 34, 22);
       this.rig.update(dt, t, this.camTarget.set(0, 0.5, 0));
-    } else if (this.phase === 'select' || this.phase === 'victory') {
+    } else if (this.phase === 'select') {
+      // Wide lens on the row of heroes; in step 2, close in on the chosen one.
+      const h = this.lineup[this.chosen];
+      const fov = this.detailsOpen ? 32 : 36;
+      if (Math.abs(this.camera.fov - fov) > 0.01) {
+        this.camera.fov = THREE.MathUtils.damp(this.camera.fov, fov, 5, dt);
+        this.camera.updateProjectionMatrix();
+      }
+      if (this.detailsOpen && h) {
+        const wide = window.innerWidth > 900;
+        this.rig.setView(0, 9, 8.2);
+        this.rig.update(dt, t, this.camTarget.set(h.position.x - (wide ? 1.9 : 0), 1.05, h.position.z));
+      } else {
+        this.rig.setView(0, 8, 8.6);
+        this.rig.update(dt, t, this.camTarget.set(0, 0.95, LINEUP_Z + 0.3));
+      }
+      return;
+    } else if (this.phase === 'victory') {
       // Hero stands to the right of the panel on wide screens.
       const wide = window.innerWidth > 900;
       this.rig.setView(0, 11, 8.4);

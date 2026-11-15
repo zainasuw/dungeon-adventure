@@ -9,6 +9,10 @@ export interface UiHandlers {
   newQuest(): void;
   continueQuest(): void;
   previewHero(id: HeroClassId): void;
+  /** Spins the chosen hero on the select screen by a number of radians. */
+  spinHero(radians: number): void;
+  /** Step 2 opened or closed: the 3D lineup steps aside or comes back. */
+  detailsOpen(open: boolean): void;
   startQuest(hero: HeroClassId, name: string, difficulty: DifficultyId): void;
   backToTitle(): void;
   resume(): void;
@@ -145,60 +149,102 @@ export class Ui {
     this.focusFirst();
   }
 
+  /** Step 1: the four heroes stand in a row in 3D; pick one. */
   showSelect(hero: HeroClassId, name: string, difficulty: DifficultyId): void {
     this.selectState = { hero, name, difficulty };
-    const tabs = HERO_ORDER.map((id) => {
+    const tags = HERO_ORDER.map((id) => {
       const c = HERO_CLASSES[id];
-      return `<button type="button" class="hero-tab" role="radio" data-hero="${id}" style="--hero:${c.color}">
-        <span class="hero-tab__icon">${iconByName(c.abilities[0].icon)}</span>
-        <span class="hero-tab__name">${c.name}</span>
+      return `<button type="button" class="hero-pick" data-hero="${id}" role="radio" style="--hero:${c.color}" aria-label="${c.name}">
+        <span class="hero-pick__hit"></span>
+        <span class="hero-pick__tag">${c.name}</span>
       </button>`;
     }).join('');
-    const diffs = (Object.keys(DIFFICULTIES) as DifficultyId[])
-      .map((id) => `<button type="button" class="seg__btn" role="radio" data-diff="${id}">${DIFFICULTIES[id].label}</button>`)
-      .join('');
     this.setScreen(
       'select',
-      `<form class="select" novalidate>
-        <header class="select__head">
-          <button type="button" class="link-btn" data-act="back">‹ Back</button>
-          <h2 class="select__title">Choose your hero</h2>
-        </header>
-        <div class="hero-tabs" role="radiogroup" aria-label="Hero">${tabs}</div>
-        <section class="hero-detail" aria-live="polite"></section>
-        <div class="select__fields">
-          <label class="field">
-            <span class="field__label">Your hero's name</span>
-            <input class="field__input" name="hero-name" maxlength="16" autocomplete="off" spellcheck="false" placeholder="Type a name" />
-          </label>
-          <div class="field">
-            <span class="field__label" id="diff-label">Difficulty</span>
-            <div class="seg" role="radiogroup" aria-labelledby="diff-label">${diffs}</div>
-            <p class="field__hint" data-diff-hint></p>
-          </div>
-        </div>
-        <button type="submit" class="btn btn--primary btn--wide">Enter the crypt</button>
-      </form>`,
+      `<button type="button" class="link-btn pick-back" data-act="back">‹ Back</button>
+      <header class="pick-head">
+        <p class="kicker">Step 1 of 2</p>
+        <h2 class="pick-title">Choose your hero</h2>
+        <p class="pick-help">Click a hero, or use the arrows. Drag to spin them around.</p>
+      </header>
+      <div class="hero-row" role="radiogroup" aria-label="Heroes">${tags}</div>
+      <button type="button" class="nav-arrow nav-arrow--prev" data-act="prev" aria-label="Previous hero">${icon('M336 64L144 256l192 192', 'icon icon--stroke')}</button>
+      <button type="button" class="nav-arrow nav-arrow--next" data-act="next" aria-label="Next hero">${icon('M176 64l192 192-192 192', 'icon icon--stroke')}</button>
+      <section class="pick-card" aria-live="polite"></section>`,
     );
-    const form = this.screen.querySelector('form')!;
-    const input = form.querySelector<HTMLInputElement>('.field__input')!;
-    input.value = name;
-    input.addEventListener('input', () => (this.selectState.name = input.value));
     this.screen.querySelectorAll<HTMLButtonElement>('[data-hero]').forEach((b) =>
       b.addEventListener('click', () => this.pickHero(b.dataset.hero as HeroClassId)),
     );
+    this.on('back', () => this.handlers.backToTitle());
+    this.on('prev', () => this.stepHero(-1));
+    this.on('next', () => this.stepHero(1));
+    this.enableDrag();
+    this.pickHero(hero, false);
+    this.screen.querySelector<HTMLElement>('[data-act="choose"]')?.focus({ preventScroll: true });
+  }
+
+  /** Step 2: name and difficulty, with the chosen hero still on screen. */
+  private showDetails(): void {
+    const s = this.selectState;
+    const c = HERO_CLASSES[s.hero];
+    const diffs = (Object.keys(DIFFICULTIES) as DifficultyId[])
+      .map(
+        (id) => `<button type="button" class="diff" role="radio" data-diff="${id}">
+          <b>${DIFFICULTIES[id].label}</b><span>${DIFFICULTIES[id].hint}</span>
+        </button>`,
+      )
+      .join('');
+    this.setScreen(
+      'details',
+      `<form class="details card" novalidate style="--hero:${c.color}">
+        <p class="kicker">Step 2 of 2</p>
+        <h2 class="card__title">Ready, ${c.name}?</h2>
+        <label class="field">
+          <span class="field__label">Your hero's name <small>(you can skip this)</small></span>
+          <input class="field__input" name="hero-name" maxlength="16" autocomplete="off" spellcheck="false" placeholder="${c.name}" />
+        </label>
+        <div class="field">
+          <span class="field__label" id="diff-label">How hard?</span>
+          <div class="diffs" role="radiogroup" aria-labelledby="diff-label">${diffs}</div>
+        </div>
+        <div class="stack stack--row">
+          <button type="button" class="btn btn--ghost" data-act="back">‹ Pick another hero</button>
+          <button type="submit" class="btn btn--primary">Start the adventure</button>
+        </div>
+      </form>`,
+    );
+    this.screen.style.setProperty('--hero', c.color);
+    const form = this.screen.querySelector('form')!;
+    const input = form.querySelector<HTMLInputElement>('.field__input')!;
+    input.value = s.name;
+    input.addEventListener('input', () => (this.selectState.name = input.value));
     this.screen.querySelectorAll<HTMLButtonElement>('[data-diff]').forEach((b) =>
       b.addEventListener('click', () => this.pickDifficulty(b.dataset.diff as DifficultyId)),
     );
-    this.on('back', () => this.handlers.backToTitle());
+    this.on('back', () => {
+      this.handlers.detailsOpen(false);
+      this.showSelect(s.hero, s.name, s.difficulty);
+    });
     form.addEventListener('submit', (e) => {
       e.preventDefault();
-      const s = this.selectState;
       this.handlers.startQuest(s.hero, s.name.trim(), s.difficulty);
     });
-    this.pickHero(hero, false);
-    this.pickDifficulty(difficulty);
-    this.screen.querySelector<HTMLButtonElement>(`[data-hero="${hero}"]`)?.focus();
+    this.pickDifficulty(s.difficulty);
+    this.handlers.detailsOpen(true);
+    input.focus({ preventScroll: true });
+  }
+
+  /** Pins each hero's name tag and click area to where the 3D hero stands. */
+  placeHeroTags(tags: { id: HeroClassId; x: number; top: number; bottom: number }[]): void {
+    if (this.screenName !== 'select') return;
+    for (const t of tags) {
+      const b = this.screen.querySelector<HTMLElement>(`[data-hero="${t.id}"]`);
+      if (!b) continue;
+      const height = Math.max(60, t.bottom - t.top);
+      b.style.transform = `translate(${t.x}px, ${t.top}px) translateX(-50%)`;
+      b.style.height = `${height}px`;
+      b.style.width = `${Math.max(110, height * 0.55)}px`;
+    }
   }
 
   showHowTo(onClose: () => void): void {
@@ -538,26 +584,51 @@ export class Ui {
       b.tabIndex = on ? 0 : -1;
     });
     this.screen.style.setProperty('--hero', c.color);
-    const meter = (label: string, value: number) => {
+    const bar = (label: string, value: number) => {
       const v = Math.max(1, Math.min(5, value));
-      const pips = Array.from({ length: 5 }, (_, i) => `<i class="${i < v ? 'on' : ''}"></i>`).join('');
-      return `<div class="meter" aria-label="${label} ${v} of 5"><span>${label}</span><span class="meter__track">${pips}</span></div>`;
+      return `<div class="stat-bar" aria-label="${label}: ${v} out of 5"><span>${label}</span><span class="stat-bar__track"><span style="width:${v * 20}%"></span></span></div>`;
     };
-    const abilities = c.abilities
-      .map((a) => `<li>${iconByName(a.icon, 'icon icon--hero')}<span>${a.name}</span><kbd>${KEY_LABEL[a.key]}</kbd></li>`)
-      .join('');
-    this.screen.querySelector('.hero-detail')!.innerHTML = `
-      <h3 class="hero-detail__name">${c.name}</h3>
-      <p class="hero-detail__epithet">${c.epithet}</p>
-      <p class="hero-detail__blurb">${c.blurb}</p>
-      <div class="meters">
-        ${meter('Health', Math.round(c.maxHp / 30))}
-        ${meter('Power', c.stats.power)}
-        ${meter('Speed', c.stats.agility)}
+    const card = this.screen.querySelector('.pick-card');
+    if (!card) return;
+    card.innerHTML = `
+      <div class="pick-card__text">
+        <h3 class="pick-card__name">${c.name}</h3>
+        <p class="pick-card__blurb">${c.blurb}</p>
+        <p class="pick-card__power"><b>Special:</b> ${c.passive.name}. ${c.passive.text}</p>
       </div>
-      <p class="passive"><b>${c.passive.name}</b> ${c.passive.text}</p>
-      <ul class="abilities">${abilities}</ul>`;
+      <div class="pick-card__stats">
+        ${bar('Health', Math.round(c.maxHp / 30))}
+        ${bar('Power', c.stats.power)}
+        ${bar('Speed', c.stats.agility)}
+      </div>
+      <button type="button" class="btn btn--primary pick-card__go" data-act="choose">Play as ${c.name} <span aria-hidden="true">›</span></button>`;
+    this.on('choose', () => this.showDetails());
     if (preview) this.handlers.previewHero(id);
+  }
+
+  private stepHero(delta: number): void {
+    const i = HERO_ORDER.indexOf(this.selectState.hero);
+    this.pickHero(HERO_ORDER[(i + delta + HERO_ORDER.length) % HERO_ORDER.length]);
+  }
+
+  /** Drag anywhere empty on the select screen to spin the chosen hero. */
+  private enableDrag(): void {
+    let last: number | null = null;
+    this.screen.onpointerdown = (e) => {
+      if ((e.target as HTMLElement).closest('button, .pick-card, input')) return;
+      last = e.clientX;
+      this.screen.setPointerCapture(e.pointerId);
+      this.screen.classList.add('screen--dragging');
+    };
+    this.screen.onpointermove = (e) => {
+      if (last === null) return;
+      this.handlers.spinHero((e.clientX - last) * 0.012);
+      last = e.clientX;
+    };
+    this.screen.onpointerup = this.screen.onpointercancel = () => {
+      last = null;
+      this.screen.classList.remove('screen--dragging');
+    };
   }
 
   private pickDifficulty(id: DifficultyId): void {
@@ -567,10 +638,10 @@ export class Ui {
       b.setAttribute('aria-checked', String(on));
       b.tabIndex = on ? 0 : -1;
     });
-    this.screen.querySelector('[data-diff-hint]')!.textContent = DIFFICULTIES[id].hint;
   }
 
   private setScreen(name: string, html: string): void {
+    this.screen.onpointerdown = this.screen.onpointermove = this.screen.onpointerup = this.screen.onpointercancel = null;
     this.screen.dataset.screen = name;
     this.screen.className = `screen-layer screen-layer--on screen--${name}`;
     this.screen.innerHTML = html;
@@ -603,24 +674,25 @@ export class Ui {
       } else if (name === 'select') {
         e.preventDefault();
         this.handlers.backToTitle();
+      } else if (name === 'details') {
+        e.preventDefault();
+        const st = this.selectState;
+        this.handlers.detailsOpen(false);
+        this.showSelect(st.hero, st.name, st.difficulty);
       }
       return;
     }
-    if (name === 'select' && (e.key === 'ArrowRight' || e.key === 'ArrowLeft' || e.key === 'ArrowDown' || e.key === 'ArrowUp')) {
-      const inDiff = (e.target as HTMLElement).closest?.('.seg');
-      if (inDiff) {
-        const ids = Object.keys(DIFFICULTIES) as DifficultyId[];
-        const i = ids.indexOf(this.selectState.difficulty);
-        const next = ids[(i + (e.key === 'ArrowRight' || e.key === 'ArrowDown' ? 1 : ids.length - 1)) % ids.length];
-        this.pickDifficulty(next);
-        this.screen.querySelector<HTMLElement>(`[data-diff="${next}"]`)?.focus();
-      } else {
-        const i = HERO_ORDER.indexOf(this.selectState.hero);
-        const next = HERO_ORDER[(i + (e.key === 'ArrowRight' || e.key === 'ArrowDown' ? 1 : HERO_ORDER.length - 1)) % HERO_ORDER.length];
-        this.pickHero(next);
-        this.screen.querySelector<HTMLElement>(`[data-hero="${next}"]`)?.focus();
-      }
+    if (name === 'select' && (e.key === 'ArrowRight' || e.key === 'ArrowLeft')) {
       e.preventDefault();
+      this.stepHero(e.key === 'ArrowRight' ? 1 : -1);
+      this.screen.querySelector<HTMLElement>('[data-act="choose"]')?.focus({ preventScroll: true });
+    } else if (name === 'details' && (e.target as HTMLElement).closest?.('.diffs') && /^Arrow/.test(e.key)) {
+      e.preventDefault();
+      const ids = Object.keys(DIFFICULTIES) as DifficultyId[];
+      const i = ids.indexOf(this.selectState.difficulty);
+      const next = ids[(i + (e.key === 'ArrowRight' || e.key === 'ArrowDown' ? 1 : ids.length - 1)) % ids.length];
+      this.pickDifficulty(next);
+      this.screen.querySelector<HTMLElement>(`[data-diff="${next}"]`)?.focus();
     }
   };
 }
