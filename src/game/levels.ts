@@ -26,6 +26,8 @@ export interface Level {
   waves: EnemyKind[][];
   /** Potions lying around the hall. */
   potions: [number, number][];
+  /** The final room: a boss fight instead of a pillar. */
+  boss?: boolean;
 }
 
 export const LEVELS: Level[] = [
@@ -73,7 +75,22 @@ export const LEVELS: Level[] = [
     waves: [['runt', 'runt', 'runt'], ['brute', 'mage', 'skeleton']],
     potions: [[-13, -8.5], [13, 8.5], [-13, 8.5]],
   },
+  {
+    view: { yaw: 0, pitch: 50, distance: 22 },
+    intro: { yaw: 0, pitch: 14, distance: 13, focus: [0, 2.6, -5] },
+    pillar: '',
+    hall: 'The Throne of Bones',
+    mood: 5,
+    crystal: '#c77dff',
+    sleepers: [],
+    waves: [],
+    potions: [[-12.5, 8], [12.5, 8], [-12.5, -6], [12.5, -6]],
+    boss: true,
+  },
 ];
+
+/** How many halls hold a pillar (the boss room doesn't). */
+export const PILLAR_HALLS = LEVELS.filter((l) => !l.boss).length;
 
 export type DifficultyId = 'easy' | 'normal' | 'hard';
 

@@ -3,7 +3,7 @@ import type { Assets, SkeletonModel } from '../core/assets';
 import { damp, dampAngle } from '../core/math';
 import { Character } from './character';
 
-export type EnemyKind = 'runt' | 'skeleton' | 'brute' | 'mage';
+export type EnemyKind = 'runt' | 'skeleton' | 'brute' | 'mage' | 'king';
 
 export interface EnemyDef {
   kind: EnemyKind;
@@ -88,6 +88,23 @@ export const ENEMIES: Record<EnemyKind, EnemyDef> = {
     weapons: [{ item: 'Skeleton_Axe', hand: 'right' }],
     eyes: '#ff5a2a',
   },
+  king: {
+    kind: 'king',
+    name: 'Skeleton King',
+    model: 'Skeleton_Warrior',
+    scale: 2.1,
+    hp: 760,
+    speed: 2.3,
+    damage: 20,
+    reach: 3.3,
+    rest: 1.5,
+    clip: '2H_Melee_Attack_Chop',
+    clipSpeed: 0.5,
+    hitAt: 0.55,
+    block: 0,
+    weapons: [{ item: 'Skeleton_Axe', hand: 'right' }],
+    eyes: '#c77dff',
+  },
   mage: {
     kind: 'mage',
     name: 'Bone Mage',
@@ -161,6 +178,15 @@ export class Enemy extends Character {
     this.cooldown = 0.6 + Math.random() * 0.8;
   }
 
+  /** The King's second phase: quicker swings and shorter warnings. */
+  enrage(): void {
+    this.speedBoost = 1.3;
+    this.animSpeed = 1.35;
+  }
+
+  speedBoost = 1;
+  animSpeed = 1;
+
   /** Turns this monster into an elite champion. */
   makeElite(hpBoost: number): void {
     this.elite = true;
@@ -208,7 +234,7 @@ export class Enemy extends Character {
       return amount;
     }
     // Heavy hits interrupt light enemies; the Brute only flinches.
-    if (this.state !== 'rising' && (this.def.kind !== 'brute' || amount >= 30)) {
+    if (this.state !== 'rising' && this.def.kind !== 'king' && (this.def.kind !== 'brute' || amount >= 30)) {
       this.state = 'hurt';
       this.stateTime = 0;
       this.telegraph = 0;
@@ -300,7 +326,7 @@ export class Enemy extends Character {
       }
     }
 
-    const speed = def.speed;
+    const speed = def.speed * this.speedBoost;
     this.velocity.x = damp(this.velocity.x, this.steer.x * speed, 8, dt);
     this.velocity.z = damp(this.velocity.z, this.steer.z * speed, 8, dt);
     this.position.addScaledVector(this.velocity, dt);
@@ -321,7 +347,7 @@ export class Enemy extends Character {
     this.struck = false;
     this.facing = Math.atan2(dir.x, dir.z);
     this.velocity.set(0, 0, 0);
-    this.animator.play(this.def.clip, { loop: false, speed: this.def.clipSpeed, fade: 0.08, restart: true });
+    this.animator.play(this.def.clip, { loop: false, speed: this.def.clipSpeed * this.animSpeed, fade: 0.08, restart: true });
   }
 
   private updateAttack(dt: number, ctx: EnemyContext): void {

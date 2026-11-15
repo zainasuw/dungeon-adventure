@@ -1913,3 +1913,73 @@ kbd {
 .stats .stat:first-child {
   grid-column: 1 / -1;
 }
+
+/* ───────────── Boss health bar ───────────── */
+
+.boss-bar {
+  position: absolute;
+  top: 168px;
+  left: 50%;
+  z-index: 3;
+  display: grid;
+  justify-items: center;
+  gap: 6px;
+  width: min(620px, calc(100% - 40px));
+  opacity: 0;
+  transform: translate(-50%, -8px);
+  transition: opacity 0.4s, transform 0.4s var(--ease-out);
+  pointer-events: none;
+}
+
+.boss-bar--on {
+  opacity: 1;
+  transform: translate(-50%, 0);
+}
+
+.boss-bar__name {
+  margin: 0;
+  font: 700 24px var(--serif);
+  color: #e6c8ff;
+  text-shadow: 0 2px 12px #000, 0 0 18px rgba(199, 125, 255, 0.6);
+}
+
+.boss-bar__track {
+  position: relative;
+  width: 100%;
+  height: 18px;
+  overflow: hidden;
+  border: 1px solid rgba(199, 125, 255, 0.6);
+  border-radius: 9px;
+  background: rgba(0, 0, 0, 0.7);
+  box-shadow: 0 0 22px rgba(199, 125, 255, 0.3);
+}
+
+.boss-bar__fill,
+.boss-bar__lag {
+  position: absolute;
+  inset: 0;
+  transform-origin: left;
+}
+
+.boss-bar__lag {
+  background: #ffe0a8;
+  transition: transform 0.8s ease-out 0.25s;
+}
+
+.boss-bar__fill {
+  background: linear-gradient(180deg, #d79bff, #8a3fd1 60%, #5d1f9a);
+  transition: transform 0.12s ease-out;
+}
+
+.boss-bar__track i {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: rgba(255, 255, 255, 0.55);
+}
+
+/* While the boss bar shows, announcements sit below it. */
+#ui:has(.boss-bar--on) .banner {
+  top: 232px;
+}

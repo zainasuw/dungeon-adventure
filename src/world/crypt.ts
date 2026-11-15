@@ -60,6 +60,8 @@ interface Theme {
   hazards: [number, number][];
   crates: [number, number][];
   chest: [number, number, number];
+  /** The boss room has no altar in the middle: it's an open arena. */
+  noAltar?: boolean;
 }
 
 const SMALL_PLAIN = ['floor_tile_small', 'floor_tile_small', 'floor_tile_small', 'floor_tile_small_broken_A', 'floor_tile_small_broken_B', 'floor_tile_small_weeds_A', 'floor_tile_small_decorated'];
@@ -223,6 +225,33 @@ const THEMES: Theme[] = [
       }
     },
   },
+  // 5. The Throne of Bones: an open arena for the Skeleton King.
+  {
+    floor: { large: 0.6, rocks: 0.1, dirt: 0, small: ['floor_tile_small_decorated', 'floor_tile_small', 'floor_tile_small_broken_A'] },
+    north: ['wall_pillar', 'wall_arched', 'wall_pillar', 'DOOR', 'wall_pillar', 'wall_arched', 'wall_pillar'],
+    west: ['wall_pillar', 'wall_arched', 'wall_pillar', 'wall_arched', 'wall_pillar'],
+    east: ['wall_pillar', 'wall_arched', 'wall_pillar', 'wall_arched', 'wall_pillar'],
+    banners: true,
+    pillar: 'pillar_decorated',
+    pillars: [[-11, -6], [11, -6], [-11, 5], [11, 5]],
+    pillarTorches: true,
+    dormant: [],
+    spawns: [[-7, 6], [7, 6], [-9, -2], [9, -2], [0, 7]],
+    hazards: [],
+    crates: [[-14, -9.5], [14, -9.5], [-14, 9.5], [14, 9.5]],
+    chest: [-6.5, -10.1, 0],
+    noAltar: true,
+    props(kit, solid, torches, top) {
+      kit.instance('banner_triple_blue', -4, 0, -ROOM.halfZ, 0);
+      kit.instance('banner_triple_blue', 4, 0, -ROOM.halfZ, 0);
+      kit.instance('coin_stack_large', 6.4, 0, -10.2, 0.4);
+      kit.instance('coin_stack_medium', 7.6, 0, -9.6, 1.1);
+      kit.instance('sword_shield_broken', -13.4, 0, 0, 1.2);
+      kit.instance('sword_shield_broken', 13.4, 0, 1.2, -0.8);
+      solid('rubble_half', -13.6, 3, 0.3);
+      for (const [x, z] of [[-5, -5], [5, -5], [-5, 5], [5, 5]]) torches.add(top(kit.single('torch_lit', x, 0, z, 0)));
+    },
+  },
 ];
 
 /** Builds one of the four halls. */
@@ -323,7 +352,8 @@ export function buildCrypt(assets: Assets, embers: Particles, themeIndex = 0): C
 
   const altar = new Altar(new THREE.Vector3(0, 0, 0));
   group.add(altar.group);
-  colliders.add(0, 0, 1.55, 1.55);
+  if (theme.noAltar) altar.group.visible = false;
+  else colliders.add(0, 0, 1.55, 1.55);
 
   if (!doorway) throw new Error('north wall needs a door');
   const door = new GoldenDoor(doorway);

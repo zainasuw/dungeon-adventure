@@ -9,7 +9,7 @@ import { dampAngle } from './core/math';
 import { Input } from './core/input';
 import { Audio } from './game/audio';
 import { BLESSINGS, rollBlessings, type Blessing, type BlessingLevels } from './game/blessings';
-import { clearSave, DIFFICULTIES, LEVELS, loadSave, MAX_POTIONS, writeSave, type Difficulty, type DifficultyId, type SaveData } from './game/levels';
+import { clearSave, DIFFICULTIES, LEVELS, loadSave, MAX_POTIONS, PILLAR_HALLS, writeSave, type Difficulty, type DifficultyId, type SaveData } from './game/levels';
 import { MOODS, type Mood } from './render/moods';
 import { Renderer } from './render/renderer';
 import { applySeeThrough, seeThrough } from './render/see-through';
@@ -122,6 +122,10 @@ export class Game {
   private crates: Crate[] = [];
   private coinsOnFloor: Coin[] = [];
   private chest: Chest | null = null;
+  /** The Skeleton King, while the boss room is live. */
+  private boss: Enemy | null = null;
+  /** Health marks where the King calls guards (fractions of max health still to pass). */
+  private bossCalls: number[] = [];
   private coins = 0;
   private readonly coinGeometry = new THREE.CylinderGeometry(0.2, 0.2, 0.06, 18);
   private readonly coinMaterial = new THREE.MeshStandardMaterial({ color: '#ffcc33', emissive: '#a86b00', emissiveIntensity: 0.6, metalness: 0.9, roughness: 0.25 });
@@ -570,13 +574,75 @@ export class Game {
     const view = LEVELS[index].view;
     this.rig.setView(view.yaw, view.pitch, view.distance);
     this.ui.setQuest(index, this.pillars);
-    this.ui.objective('Follow the golden arrow to the altar');
+    this.ui.objective(level.boss ? 'The Skeleton King awakens…' : 'Follow the golden arrow to the altar');
     const delay = intro ? 1.1 : 0;
     this.later(delay + 2.6, () => this.tip('walk', 'Walk with <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> or the arrow keys'));
-    const banner = () => this.ui.banner(`Hall ${index + 1} of 4`, level.hall, `Guarding the Pillar of ${level.pillar}`);
+    if (level.boss) this.startBossFight(intro ? 2.4 : 0.8);
+    const banner = level.boss
+      ? () => this.ui.banner('Final battle', level.hall, 'Defeat the Skeleton King to escape!')
+      : () => this.ui.banner(`Hall ${index + 1} of ${PILLAR_HALLS}`, level.hall, `Guarding the Pillar of ${level.pillar}`);
     if (intro) this.later(delay, banner);
     else banner();
     this.ui.fade(false);
+  }
+
+  /** The King lies before his throne, then rises when the room's opening shot is done. */
+  private startBossFight(delay: number): void {
+    this.step = 'fight';
+    const king = this.spawnEnemy('king', new THREE.Vector3(0, 0, -5));
+    king.facing = 0;
+    king.sleep();
+    this.boss = king;
+    this.bossCalls = [0.66, 0.33];
+    this.later(delay, () => {
+      if (!king.alive) return;
+      king.rise(false);
+      this.audio.play('rise');
+      this.audio.play('defeat');
+      this.shake(0.4);
+      this.puff(king.position, 30);
+      this.ui.bossBar('Skeleton King', 1);
+      this.ui.objective('Defeat the Skeleton King! Dodge out of the red rings');
+      this.later(1.5, () => this.tip('boss', 'Big red ring = a huge slam is coming. Press <kbd>Space</kbd> to dodge out!', 6));
+    });
+  }
+
+  /** Called every frame in the boss room: health bar, guards, phase two. */
+  private updateBoss(): void {
+    const king = this.boss;
+    if (!king) return;
+    const f = king.hp / king.maxHp;
+    this.ui.bossBar('Skeleton King', f);
+    if (this.bossCalls.length && f <= this.bossCalls[0] && king.alive) {
+      this.bossCalls.shift();
+      const second = this.bossCalls.length === 0;
+      this.ui.banner('The King roars', second ? 'Guards, again!' : 'Guards, to me!', second ? 'He is weakening. Keep going!' : 'Beat his guards, then strike the King');
+      this.audio.play('rise');
+      this.shake(0.35);
+      this.spawnWave(this.difficulty.id === 'easy' ? ['runt', 'runt'] : ['runt', 'skeleton', 'runt']);
+    }
+    if (f <= 0.5 && king.animSpeed === 1 && king.alive) {
+      king.enrage();
+      this.floatAt(king.position, 4.6, 'Enraged!', 'crit');
+      this.tip('enraged', 'The King is angry: his slams now throw bones. Dodge them!');
+    }
+  }
+
+  private onBossDefeated(): void {
+    this.boss = null;
+    this.ui.bossBar(null, 0);
+    // Any guards left crumble with their king.
+    for (const e of this.enemies) if (e.alive) {
+      e.hurt(99999, e.position, 0);
+      this.onEnemyDied(e);
+    }
+    this.crypt.door.setProgress(PILLAR_HALLS);
+    this.crypt.door.open();
+    this.audio.play('victory');
+    this.shake(0.5);
+    this.ui.banner('Victory!', 'The Skeleton King is defeated', 'The golden door is open. Escape!', 4);
+    this.ui.objective('Escape through the golden door!');
+    if (this.hero.state === 'free') this.hero.animator.play('Cheer', { loop: false, fade: 0.15, restart: true });
   }
 
   /** Swaps in the room for a hall: its own floor, walls, pillars, props and traps. */
@@ -597,6 +663,8 @@ export class Game {
     for (const c of this.crates) this.removeCrate(c);
     for (const c of this.coinsOnFloor) this.scene.remove(c.mesh);
     this.coinsOnFloor = [];
+    this.boss = null;
+    this.ui.bossBar(null, 0);
     if (this.chest) {
       this.scene.remove(this.chest.object);
       const i = this.crypt.colliders.boxes.indexOf(this.chest.box);
@@ -673,18 +741,19 @@ export class Game {
 
   private onCleared(): void {
     this.step = 'cleared';
+    if (LEVELS[this.level].boss) return this.onBossDefeated();
     this.pillars = Math.max(this.pillars, this.level + 1);
     this.crypt.door.setProgress(this.pillars);
     this.crypt.door.open();
     this.ui.setQuest(this.level, this.pillars);
     this.audio.play('clear');
     this.later(0.6, () => this.audio.play('door'));
-    const last = this.level === LEVELS.length - 1;
-    const left = LEVELS.length - this.pillars;
+    const last = this.pillars >= PILLAR_HALLS;
+    const left = PILLAR_HALLS - this.pillars;
     this.ui.banner(
-      `Pillar ${this.pillars} of 4`,
+      `Pillar ${this.pillars} of ${PILLAR_HALLS}`,
       `Pillar of ${LEVELS[this.level].pillar}`,
-      last ? 'All four pillars! Run for the golden door!' : `${left} more to go! Follow the arrow to the door`,
+      last ? 'All four pillars! The way to the Skeleton King is open' : `${left} more to go! Follow the arrow to the door`,
     );
     this.later(2.5, () => this.crypt.altar.settle());
     // A reward for clearing the hall, so you're never left without a potion.
@@ -692,8 +761,8 @@ export class Game {
       this.dropPotion(new THREE.Vector3(1.8, 0, 3));
       this.burst(new THREE.Vector3(1.8, 1, 3), this.heal, 30, 3);
     });
-    this.ui.objective(last ? 'The way out is open! Follow the arrow to the golden door' : 'Follow the arrow to the golden door');
-    if (!last) this.later(2.9, () => this.offerBlessings());
+    this.ui.objective(last ? 'Face the Skeleton King! Follow the arrow to the door' : 'Follow the arrow to the golden door');
+    this.later(2.9, () => this.offerBlessings());
     if (this.hero.state === 'free') this.hero.animator.play('Cheer', { loop: false, fade: 0.15, restart: true });
   }
 
@@ -888,6 +957,7 @@ export class Game {
     this.updateZones(dt);
     this.collectPickups();
     this.updateHazards(dt);
+    this.updateBoss();
     this.updateCoins(dt);
     this.updateChest();
 
@@ -903,6 +973,7 @@ export class Game {
         this.claimPillar();
       });
     }
+    if (this.step === 'fight' && this.boss && !this.boss.alive) this.onCleared();
     if (this.step === 'fight') {
       const living = this.enemies.filter((e) => e.alive);
       const awake = living.filter((e) => e.state !== 'dormant');
@@ -916,7 +987,10 @@ export class Game {
       }
       const pending = this.timers.length > 0 || this.waves.length > 0;
       if (living.length === 0 && !pending) this.onCleared();
-      else this.ui.objective(`Defeat the skeletons: ${living.length + this.waves.flat().length} left`);
+      else if (this.boss) {
+        const guards = living.filter((e) => e !== this.boss).length;
+        this.ui.objective(guards ? `Defeat the Skeleton King! (${guards} ${guards === 1 ? 'guard' : 'guards'} left)` : 'Defeat the Skeleton King!');
+      } else this.ui.objective(`Defeat the skeletons: ${living.length + this.waves.flat().length} left`);
     }
     if (this.step === 'cleared') {
       this.guideToDoor(dt);
@@ -1089,6 +1163,7 @@ export class Game {
   }
 
   private enemyStrike(e: Enemy): void {
+    if (e.def.kind === 'king') return this.kingSlam(e);
     const hero = this.hero;
     this.tmp.copy(hero.position).sub(e.position).setY(0);
     const dist = this.tmp.length();
@@ -1106,7 +1181,28 @@ export class Game {
     if (e.def.kind === 'brute') this.shake(0.3);
   }
 
-  private enemyShoot(e: Enemy, dir: THREE.Vector3): void {
+  /** A ground slam that hits everything inside the red ring; in phase two it also throws bones. */
+  private kingSlam(king: Enemy): void {
+    const hero = this.hero;
+    this.shake(0.45);
+    this.audio.play('hurt');
+    this.ring(king.position.clone().setY(0.3), king.def.reach, 70);
+    this.puff(king.position, 24);
+    const dist = Math.hypot(hero.position.x - king.position.x, hero.position.z - king.position.z);
+    if (hero.alive && dist < king.def.reach * 0.9 + hero.radius) {
+      this.damageHero(king.def.damage * this.difficulty.enemyDamage, king.position);
+    }
+    if (king.animSpeed > 1) {
+      const n = this.difficulty.id === 'easy' ? 6 : 10;
+      const spin = Math.random() * Math.PI;
+      for (let i = 0; i < n; i++) {
+        const a = spin + (i / n) * Math.PI * 2;
+        this.enemyShoot(king, new THREE.Vector3(Math.sin(a), 0, Math.cos(a)), 6.5);
+      }
+    }
+  }
+
+  private enemyShoot(e: Enemy, dir: THREE.Vector3, speed?: number): void {
     const color = new THREE.Color(e.def.eyes);
     const mesh = this.orb(color, 2.6);
     mesh.scale.setScalar(1.4);
@@ -1115,8 +1211,8 @@ export class Game {
     this.audio.play('cast');
     this.projectiles.push({
       mesh,
-      velocity: dir.clone().multiplyScalar(e.def.ranged!.projectileSpeed),
-      damage: e.def.damage * this.difficulty.enemyDamage,
+      velocity: dir.clone().multiplyScalar(speed ?? e.def.ranged!.projectileSpeed),
+      damage: (e.def.kind === 'king' ? 10 : e.def.damage) * this.difficulty.enemyDamage,
       radius: 0.35,
       life: 3,
       hostile: true,
@@ -1201,7 +1297,7 @@ export class Game {
 
   private onEnemyDied(e: Enemy): void {
     this.kills++;
-    const worth = { runt: 2, skeleton: 3, mage: 4, brute: 6 }[e.def.kind] + (e.elite ? 10 : 0);
+    const worth = { runt: 2, skeleton: 3, mage: 4, brute: 6, king: 60 }[e.def.kind] + (e.elite ? 10 : 0);
     this.dropCoins(e.position, worth);
     this.audio.play('bones');
     this.puff(e.position, 18);
@@ -1928,7 +2024,7 @@ export class Game {
     if (this.paused) return;
     if (this.step === 'cleared' && this.crypt.door.isOpen) {
       const s = this.toScreen(new THREE.Vector3(0, 0, -10.6), 0.2);
-      this.ui.prompt(this.level === LEVELS.length - 1 ? 'Escape!' : 'Next hall', s.x, s.y);
+      this.ui.prompt(this.level === LEVELS.length - 1 ? 'Escape!' : LEVELS[this.level + 1]?.boss ? 'To the King' : 'Next hall', s.x, s.y);
     } else {
       this.ui.prompt(null);
     }

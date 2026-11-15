@@ -1,5 +1,5 @@
 import { HERO_CLASSES, type HeroClass, type HeroClassId, type SlotKey } from '../actors/classes';
-import { DIFFICULTIES, LEVELS, MAX_POTIONS, type DifficultyId, type SaveData } from '../game/levels';
+import { DIFFICULTIES, LEVELS, MAX_POTIONS, PILLAR_HALLS, type DifficultyId, type SaveData } from '../game/levels';
 import { ICONS, type IconName } from './icons';
 import type { Blessing, BlessingLevels } from '../game/blessings';
 
@@ -105,7 +105,7 @@ export class Ui {
   private lagHp = 0;
 
   constructor(
-    root: HTMLElement,
+    private readonly root: HTMLElement,
     private readonly handlers: UiHandlers,
   ) {
     this.bars = el('div', 'enemy-bars');
@@ -141,7 +141,7 @@ export class Ui {
     const cont = save
       ? `<button class="btn btn--primary btn--big" data-act="continue">
            <span>Continue</span>
-           <small>${save.name ? `${escapeHtml(save.name)} the ` : ''}${HERO_CLASSES[save.hero].name} · Hall ${save.level + 1} of 4</small>
+           <small>${save.name ? `${escapeHtml(save.name)} the ` : ''}${HERO_CLASSES[save.hero].name} · ${LEVELS[save.level]?.boss ? 'Final battle' : `Hall ${save.level + 1} of ${PILLAR_HALLS}`}</small>
          </button>`
       : '';
     this.setScreen(
@@ -376,6 +376,23 @@ export class Ui {
     this.focusFirst('.bless');
   }
 
+  /** The big health bar for the Skeleton King, or null to hide it. */
+  bossBar(name: string | null, fraction: number): void {
+    let bar = this.root.querySelector<HTMLElement>('.boss-bar');
+    if (!name) {
+      bar?.classList.remove('boss-bar--on');
+      return;
+    }
+    if (!bar) {
+      bar = el('div', 'boss-bar', `<p class="boss-bar__name"></p><div class="boss-bar__track"><span class="boss-bar__lag"></span><span class="boss-bar__fill"></span><i style="left:66%"></i><i style="left:33%"></i></div>`);
+      this.root.append(bar);
+    }
+    bar.classList.add('boss-bar--on');
+    bar.querySelector('.boss-bar__name')!.textContent = name;
+    (bar.querySelector('.boss-bar__fill') as HTMLElement).style.transform = `scaleX(${Math.max(0, fraction)})`;
+    (bar.querySelector('.boss-bar__lag') as HTMLElement).style.transform = `scaleX(${Math.max(0, fraction)})`;
+  }
+
   setCoins(n: number, pop: boolean): void {
     const el = this.hud.querySelector<HTMLElement>('[data-coins]');
     if (!el) return;
@@ -513,8 +530,8 @@ export class Ui {
 
   setQuest(level: number, pillars: number): void {
     const l = LEVELS[level];
-    this.hallEl.textContent = `Hall ${level + 1} of 4 · ${l.hall}`;
-    this.pillarsEl.innerHTML = LEVELS.map(
+    this.hallEl.textContent = l.boss ? `Final battle · ${l.hall}` : `Hall ${level + 1} of ${PILLAR_HALLS} · ${l.hall}`;
+    this.pillarsEl.innerHTML = LEVELS.filter((x) => !x.boss).map(
       (lv, i) =>
         `<span class="pip ${i < pillars ? 'pip--lit' : ''} ${i === level && i >= pillars ? 'pip--now' : ''}" style="--pip:${lv.crystal}" title="Pillar of ${lv.pillar}">${icon(PILLAR_PATH)}</span>`,
     ).join('');
@@ -621,7 +638,7 @@ export class Ui {
   // ───────────────────────── Internals ─────────────────────────
 
   private pillarRow(lit: number): string {
-    return `<div class="pillar-row">${LEVELS.map(
+    return `<div class="pillar-row">${LEVELS.filter((x) => !x.boss).map(
       (lv, i) => `<span class="pip pip--big ${i < lit ? 'pip--lit' : ''}" style="--pip:${lv.crystal}">${icon(PILLAR_PATH)}<small>${lv.pillar}</small></span>`,
     ).join('')}</div>`;
   }
