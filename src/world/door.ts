@@ -32,6 +32,7 @@ export class GoldenDoor {
   private progress = 0;
   private glow = 0;
   private openAmount = 0;
+  private flareAmount = 0;
   private opening = false;
   private readonly door: THREE.Object3D;
   private readonly backlight: THREE.MeshBasicMaterial;
@@ -106,10 +107,16 @@ export class GoldenDoor {
 
   /** Shuts the door instantly for a fresh room. */
   reset(pillarsAwake: number): void {
+    this.flareAmount = 0;
     this.opening = false;
     this.openAmount = 0;
     this.door.rotation.y = 0;
     this.setProgress(pillarsAwake);
+  }
+
+  /** Floods the doorway with light (0..1) as the hero walks through. */
+  flare(amount: number): void {
+    this.flareAmount = amount;
   }
 
   update(time: number, dt: number): void {
@@ -119,7 +126,8 @@ export class GoldenDoor {
     this.backlight.color.copy(this.gold).multiplyScalar((1.2 + this.glow * 4) * pulse);
     this.shaftMaterial.uniforms.uStrength.value = (0.06 + this.glow * 0.22) * pulse;
     this.shaftMaterial.uniforms.uTime.value = time;
-    this.light.intensity = (3 + this.glow * 12) * pulse;
+    this.light.intensity = (3 + this.glow * 12) * pulse + this.flareAmount * 60;
+    this.backlight.color.multiplyScalar(1 + this.flareAmount * 3);
     if (this.opening) {
       this.openAmount = damp(this.openAmount, 1, 1.4, dt);
       this.door.rotation.y = -this.openAmount * 1.75;

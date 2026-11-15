@@ -308,6 +308,19 @@ export function buildCrypt(assets: Assets, embers: Particles, themeIndex = 0): C
   kit.instance('wall_corner', ROOM.halfX, 0, ROOM.halfZ, -QUARTER);
   kit.instance('wall_corner', -ROOM.halfX, 0, ROOM.halfZ, Math.PI);
 
+  // A short corridor behind the golden door, for walking through to the next hall.
+  for (const z of [-14, -18]) {
+    kit.instance('floor_tile_large', 0, 0, z, 0, 1, false);
+    kit.instance(z === -14 ? 'wall' : 'wall_cracked', -2.5, 0, z, QUARTER);
+    kit.instance(z === -14 ? 'wall_cracked' : 'wall', 2.5, 0, z, -QUARTER);
+  }
+  const glowEnd = new THREE.Mesh(
+    new THREE.PlaneGeometry(4.2, 4.6),
+    new THREE.MeshBasicMaterial({ color: new THREE.Color('#ffd27a').multiplyScalar(2.2), toneMapped: false }),
+  );
+  glowEnd.position.set(0, 2.2, -20.05);
+  group.add(glowEnd);
+
   if (theme.banners) {
     kit.instance(themeIndex === 2 ? 'banner_triple_blue' : 'banner_patternA_blue', -8, 0, -ROOM.halfZ, 0);
     kit.instance(themeIndex === 2 ? 'banner_triple_blue' : 'banner_patternA_blue', 8, 0, -ROOM.halfZ, 0);
@@ -333,6 +346,7 @@ export function buildCrypt(assets: Assets, embers: Particles, themeIndex = 0): C
 
   // Wall torches on the walls that face the camera.
   const torchSpots: [number, number, number][] = [
+    [-2.0, -15.5, QUARTER], [2.0, -17.5, -QUARTER],
     [-3.3, -ROOM.halfZ + 0.5, 0], [3.3, -ROOM.halfZ + 0.5, 0],
     [-ROOM.halfX + 0.5, -4, QUARTER], [-ROOM.halfX + 0.5, 4, QUARTER],
     [ROOM.halfX - 0.5, -4, -QUARTER], [ROOM.halfX - 0.5, 4, -QUARTER],

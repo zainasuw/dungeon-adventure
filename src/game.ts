@@ -77,6 +77,9 @@ interface Timer {
 
 const REDUCED_MOTION = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 const ALTAR_REACH = 3.2;
+/** Save the quest in the browser and offer "Continue"? Off: every visit starts fresh. */
+const KEEP_PROGRESS = false;
+if (!KEEP_PROGRESS) clearSave();
 /** Where the four heroes stand on the select screen. */
 const LINEUP_X = [-3.375, -1.125, 1.125, 3.375];
 const LINEUP_Z = 2.8;
@@ -153,6 +156,8 @@ export class Game {
   private lastDrag = -10;
   /** Seconds left of the swoop from the menu into the hall; input waits. */
   private introTimer = 0;
+  /** Seconds into walking out through the door. */
+  private walkout = 0;
   /** Seconds left holding a hall's establishing shot before the swoop. */
   private establishing = 0;
   /** Where the hero began the hall, so the pillar is only taken after the player walks to it. */
@@ -303,7 +308,7 @@ export class Game {
     this.paused = false;
     this.ui.showHud(false);
     this.ui.clearWorldUi();
-    const save = loadSave();
+    const save = KEEP_PROGRESS ? loadSave() : null;
     this.setupLevel(0, false);
     this.hero.root.visible = false;
     this.chosen = -1;
@@ -503,7 +508,12 @@ export class Game {
     }
   }
 
+  /**
+   * Progress is not kept between visits: reloading always starts fresh at the
+   * title (Zainab asked for this). Kept as a no-op so it's easy to bring back.
+   */
   private saveProgress(): void {
+    if (!KEEP_PROGRESS) return;
     writeSave({
       hero: this.hero.def.id,
       name: this.heroName,
@@ -766,21 +776,43 @@ export class Game {
     if (this.hero.state === 'free') this.hero.animator.play('Cheer', { loop: false, fade: 0.15, restart: true });
   }
 
+  /**
+   * Through the door: the hero runs on into the torch-lit corridor toward the
+   * light while the camera drops in behind, then the next hall opens. No cut.
+   */
   private exitHall(): void {
     this.step = 'exiting';
+    this.walkout = 0;
     this.ui.prompt(null);
-    this.ui.fade(true);
-    if (this.level === LEVELS.length - 1) {
-      this.later(0.8, () => this.win());
-      return;
-    }
-    this.later(0.8, () => {
+    this.ui.hint(null);
+    this.ui.showHud(false);
+    this.audio.play('door');
+    this.input.clear();
+  }
+
+  private updateWalkout(dt: number): void {
+    const hero = this.hero;
+    const before = this.walkout;
+    this.walkout += dt;
+    hero.position.x = THREE.MathUtils.damp(hero.position.x, 0, 6, dt);
+    hero.position.z = Math.max(-12.2, hero.position.z - 4.6 * dt);
+    hero.facing = dampAngle(hero.facing, Math.PI, 10, dt);
+    hero.animator.play('Running_A', { fade: 0.15 });
+    if (Math.random() < 0.5) this.glow.spawn({ x: (Math.random() - 0.5) * 3, y: 0.3 + Math.random() * 2.5, z: hero.position.z - 2 - Math.random() * 3, vz: 1.5, life: 1, size: 0.1, sizeEnd: 0.01, color: this.gold, intensity: 3 });
+    // The doorway flares with light as the hero steps into it.
+    if (this.walkout > 0.4) this.crypt.door.flare(Math.min(1, (this.walkout - 0.4) / 0.6));
+    if (before < 0.85 && this.walkout >= 0.85) this.ui.fade(true, true);
+    if (before < 1.45 && this.walkout >= 1.45) {
+      if (this.level === LEVELS.length - 1) {
+        this.win();
+        return;
+      }
       this.level += 1;
       this.potions = Math.min(this.maxPotions, this.potions);
       this.setupLevel(this.level, true, undefined, true);
       this.playEstablishingShot();
       this.saveProgress();
-    });
+    }
   }
 
   /**
@@ -795,11 +827,10 @@ export class Game {
     this.rig.distance = shot.distance;
     this.rig.setView(shot.yaw, shot.pitch, shot.distance);
     this.rig.focus.set(...shot.focus);
-    this.establishing = 1.3;
-    this.introTimer = 2.4;
+    this.establishing = 0.9;
+    this.introTimer = 1.9;
     this.input.clear();
-    this.ui.showHud(false);
-    this.later(2.4, () => this.ui.showHud(true));
+    this.ui.showHud(true);
   }
 
   private win(): void {
@@ -903,6 +934,12 @@ export class Game {
       this.rig.setView(0, 11, 8.4);
       this.rig.update(dt, t, this.camTarget.set(this.hero.position.x - (wide ? 2.3 : 0), wide ? 1.15 : 1.6, this.hero.position.z));
     } else {
+      if (this.step === 'exiting') {
+        // Stay in the room, a little lower and closer, watching the hero run into the light.
+        this.rig.setView(0, 30, 12);
+        this.rig.update(dt, t, this.camTarget.copy(this.hero.position).setY(1.2));
+        return;
+      }
       if (this.establishing > 0) {
         this.establishing -= dt;
         const shot = LEVELS[this.level].intro;
@@ -922,6 +959,11 @@ export class Game {
   private updatePlay(dt: number): void {
     if (this.choosing) return;
     this.runTimers(dt);
+    if (this.step === 'exiting') {
+      this.updateWalkout(dt);
+      this.input.endFrame();
+      return;
+    }
     if (this.introTimer > 0) {
       // The swoop: the hero cheers, then turns to face the hall. Input waits.
       this.introTimer -= dt;

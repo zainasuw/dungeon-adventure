@@ -452,7 +452,9 @@ export class Ui {
     this.hintTimer = window.setTimeout(() => this.hintEl.classList.remove('hint--on'), seconds * 1000);
   }
 
-  fade(on: boolean): void {
+  /** Fades to black, or (light) to a warm golden white for stepping through a door. */
+  fade(on: boolean, light = false): void {
+    if (on) this.fadeEl.classList.toggle('fade--light', light);
     this.fadeEl.classList.toggle('fade--on', on);
   }
 
