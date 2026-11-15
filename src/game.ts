@@ -15,6 +15,7 @@ import { Renderer } from './render/renderer';
 import { applySeeThrough, seeThrough } from './render/see-through';
 import { HERO_ORDER, Ui, type FloatKind, type QuestStats } from './ui/ui';
 import { buildCrypt, type Crypt } from './world/crypt';
+import type { Encounter } from './world/dungeon';
 import { NavGrid } from './world/nav';
 import { Particles } from './world/particles';
 
@@ -127,6 +128,8 @@ export class Game {
   private zones: Zone[] = [];
   private pickups: Potion[] = [];
   private crates: Crate[] = [];
+  /** Ambush rooms in a connected dungeon: their monsters sleep until the hero walks in. */
+  private ambushes: { encounter: Encounter; monsters: Enemy[]; sprung: boolean }[] = [];
   private coinsOnFloor: Coin[] = [];
   private chest: Chest | null = null;
   /** The Skeleton King, while the boss room is live. */
@@ -152,6 +155,11 @@ export class Game {
   private arrow!: THREE.Mesh;
   private nav!: NavGrid;
   private navTimer = 0;
+  /** A second walking map aimed at the arrow's goal, so the arrow leads through doorways. */
+  private guideNav: { grid: Crypt; nav: NavGrid } | null = null;
+  private readonly guideGoal = new THREE.Vector3();
+  private readonly guideDir = new THREE.Vector3();
+  private guideTimer = 0;
 
   // Hero select: all four heroes in a row; the chosen one steps forward and spins.
   private lineup: Hero[] = [];
@@ -163,6 +171,8 @@ export class Game {
   /** The player's own camera turn (degrees) and zoom, on top of each hall's view. */
   private camYaw = 0;
   private camZoom = 1;
+  /** Extra tilt (degrees) from dragging up and down. */
+  private camPitch = 0;
   /** How far the view has been slid away from the hero with Tab. */
   private readonly camPan = new THREE.Vector3();
   private looking = false;
@@ -174,6 +184,7 @@ export class Game {
   private dropSpeed = 0;
   /** The opening torch has been lit this quest (restarts don't go dark again). */
   private openingDone = false;
+  private brazierSwaps: { mesh: THREE.Mesh; lit: THREE.Material }[] = [];
   /** Where the default camera may roam in this scene (keeps the near wall out of view). */
   private sceneBounds = { minX: -8, maxX: 8, minZ: -8.2, maxZ: 3.6 };
   private lastDt = 0;
@@ -475,7 +486,6 @@ export class Game {
   private enterPlay(id: HeroClassId): void {
     const i = HERO_ORDER.indexOf(id);
     const stand = this.lineup[i]?.root.visible ? this.lineup[i] : null;
-    const start = this.crypt.heroStart.clone();
     const facing = stand ? stand.facing : Math.PI;
     this.setHero(id);
     this.applyBlessings();
@@ -486,7 +496,9 @@ export class Game {
     this.ui.showHud(false);
     this.phase = 'play';
     this.paused = false;
-    this.setupLevel(this.level, true, start, true);
+    // The new level's own start spot (setupLevel builds the level first, then places the hero).
+    this.setupLevel(this.level, true, undefined, true);
+    const start = this.hero.position.clone();
     this.hero.facing = facing;
     // Dropped in from above: a fall, then a thump and a puff of dust.
     this.hero.position.y = 9;
@@ -581,7 +593,9 @@ export class Game {
     if (this.crypt.theme !== index) this.buildHall(index);
     // The camera may roam a bigger or smaller room.
     const c = this.crypt;
-    this.sceneBounds = { minX: -(c.halfX - 8), maxX: c.halfX - 8, minZ: -(c.halfZ - 3.8), maxZ: c.halfZ - 8.4 };
+    this.sceneBounds = c.connected
+      ? { minX: c.center.x - c.halfX, maxX: c.center.x + c.halfX, minZ: c.center.z - c.halfZ, maxZ: c.center.z + c.halfZ }
+      : { minX: -(c.halfX - 8), maxX: c.halfX - 8, minZ: -(c.halfZ - 3.8), maxZ: c.halfZ - 8.4 };
     this.rig.bounds = { ...this.sceneBounds };
     this.setMood(MOODS[level.mood]);
     this.crypt.altar.reset();
@@ -596,6 +610,16 @@ export class Game {
       enemy.sleep();
     });
     this.placeChest();
+    this.ambushes = this.crypt.encounters.map((encounter) => ({
+      encounter,
+      sprung: false,
+      monsters: encounter.monsters.map((m) => {
+        const e = this.spawnEnemy(m.kind, new THREE.Vector3(m.at[0], 0, m.at[1]));
+        e.facing = m.facing;
+        e.sleep();
+        return e;
+      }),
+    }));
     if (live) this.placeLostTreasure();
     this.waves = level.waves.map((w) => [...w]);
     if (this.difficulty.dropLastWave && this.waves.length > 1) this.waves.pop();
@@ -619,6 +643,7 @@ export class Game {
     this.renew.left = 0;
     const view = LEVELS[index].view;
     this.camYaw = 0;
+    this.camPitch = 0;
     this.rig.setView(view.yaw, view.pitch, view.distance * this.camZoom);
     this.ui.setQuest(index, this.pillars, this.stage);
     this.ui.objective(level.boss ? 'The Skeleton King awakens…' : 'Follow the golden arrow to the altar');
@@ -627,8 +652,8 @@ export class Game {
       this.ui.objective('It\'s dark… Light the torch');
     }
     const delay = intro ? 1.1 : 0;
-    this.later(delay + 2.6, () => this.tip('walk', 'Walk with <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> or the arrow keys'));
-    this.later(delay + 9, () => this.tip('camera', 'Look around: hold <kbd>Q</kbd> or <kbd>E</kbd> to turn the camera, scroll to zoom'));
+    this.later(delay + 2.6, () => this.tip('walk', 'Walk with <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd>'));
+    this.later(delay + 9, () => this.tip('camera', 'Look around: hold the <b>right mouse button</b> and drag (or use <kbd>←</kbd> <kbd>→</kbd>), scroll to zoom'));
     if (level.boss) this.startBossFight(intro ? 2.4 : 0.8);
     const banner = level.boss
       ? () => this.ui.banner('Final battle', level.hall, 'Defeat the Skeleton King to escape!')
@@ -772,7 +797,7 @@ export class Game {
     this.ui.objective('The skeletons are waking up! Defeat them all');
     this.later(1.2, () => this.tip('attack', 'Press <kbd>F</kbd> to attack. Hold it to keep swinging. Your hero aims for you!', 6));
     this.enemies.forEach((e, i) => {
-      if (e.state !== 'dormant') return;
+      if (e.state !== 'dormant' || this.waitingInAmbush(e)) return;
       this.later(0.35 + i * 0.35, () => {
         if (!e.alive) return;
         e.rise(false);
@@ -822,8 +847,9 @@ export class Game {
     this.later(2.5, () => this.crypt.altar.settle());
     // A reward for clearing the hall, so you're never left without a potion.
     this.later(1.2, () => {
-      this.dropPotion(new THREE.Vector3(1.8, 0, 3));
-      this.burst(new THREE.Vector3(1.8, 1, 3), this.heal, 30, 3);
+      const at = this.crypt.altar.position.clone().add(new THREE.Vector3(1.8, 0, 3));
+      this.dropPotion(at);
+      this.burst(at.clone().setY(1), this.heal, 30, 3);
     });
     this.ui.objective(last ? 'Face the Skeleton King! Follow the arrow to the door' : 'Follow the arrow to the golden door');
     this.later(2.9, () => this.offerBlessings());
@@ -848,8 +874,9 @@ export class Game {
     const hero = this.hero;
     const before = this.walkout;
     this.walkout += dt;
-    hero.position.x = THREE.MathUtils.damp(hero.position.x, 0, 6, dt);
-    hero.position.z = Math.max(-this.crypt.halfZ - 0.2, hero.position.z - 4.6 * dt);
+    const door = this.crypt.doorAt;
+    hero.position.x = THREE.MathUtils.damp(hero.position.x, door.x, 6, dt);
+    hero.position.z = Math.max(door.z - 0.2, hero.position.z - 4.6 * dt);
     hero.facing = dampAngle(hero.facing, Math.PI, 10, dt);
     hero.animator.play('Running_A', { fade: 0.15 });
     if (Math.random() < 0.5) this.glow.spawn({ x: (Math.random() - 0.5) * 3, y: 0.3 + Math.random() * 2.5, z: hero.position.z - 2 - Math.random() * 3, vz: 1.5, life: 1, size: 0.1, sizeEnd: 0.01, color: this.gold, intensity: 3 });
@@ -1013,11 +1040,11 @@ export class Game {
       }
       // The hall's view, turned and zoomed by the player. Look a little ahead.
       const v = LEVELS[this.level].view;
-      this.rig.setView(v.yaw + this.camYaw, v.pitch, v.distance * this.camZoom);
+      this.rig.setView(v.yaw + this.camYaw, THREE.MathUtils.clamp(v.pitch + this.camPitch, 30, 76), v.distance * this.camZoom);
       // Once the player turns or zooms, keep the hero centred anywhere in the room.
       const free = Math.abs(this.camYaw) > 4 || this.camZoom < 0.95 || this.camPan.lengthSq() > 0.5;
       const c = this.crypt;
-      this.rig.bounds = free ? { minX: -c.halfX, maxX: c.halfX, minZ: -c.halfZ, maxZ: c.halfZ } : this.sceneBounds;
+      this.rig.bounds = free ? { minX: c.center.x - c.halfX, maxX: c.center.x + c.halfX, minZ: c.center.z - c.halfZ, maxZ: c.center.z + c.halfZ } : this.sceneBounds;
       this.rig.axes(this.forward, this.right);
       this.rig.update(dt, t, this.camTarget.copy(this.hero.position).setY(0).addScaledVector(this.forward, 1.2).add(this.camPan));
     }
@@ -1078,6 +1105,7 @@ export class Game {
     this.updateZones(dt);
     this.collectPickups();
     this.updateHazards(dt);
+    this.updateAmbushes();
     this.updateLostTreasure();
     this.updateBrazier(dt);
     this.updateBoss();
@@ -1098,7 +1126,7 @@ export class Game {
     }
     if (this.step === 'fight' && this.boss && !this.boss.alive) this.onCleared();
     if (this.step === 'fight') {
-      const living = this.enemies.filter((e) => e.alive);
+      const living = this.enemies.filter((e) => e.alive && !this.waitingInAmbush(e));
       const awake = living.filter((e) => e.state !== 'dormant');
       if (this.waves.length > 0 && living.every((e) => e.state !== 'dormant')) {
         this.waveCooldown -= dt;
@@ -1118,7 +1146,8 @@ export class Game {
     if (this.step === 'cleared') {
       this.guideToDoor(dt);
       const p = hero.position;
-      if (this.crypt.door.isOpen && p.z < -this.crypt.halfZ + 1.9 && Math.abs(p.x) < 2.6) this.exitHall();
+      const door = this.crypt.doorAt;
+      if (this.crypt.door.isOpen && p.z < door.z + 1.9 && Math.abs(p.x - door.x) < 2.6) this.exitHall();
     }
 
     this.updateArrow(dt);
@@ -1168,8 +1197,8 @@ export class Game {
     this.rig.axes(this.forward, this.right);
     if (k.key('KeyW') || k.key('ArrowUp')) move.add(this.forward);
     if (k.key('KeyS') || k.key('ArrowDown')) move.sub(this.forward);
-    if (k.key('KeyD') || k.key('ArrowRight')) move.add(this.right);
-    if (k.key('KeyA') || k.key('ArrowLeft')) move.sub(this.right);
+    if (k.key('KeyD')) move.add(this.right);
+    if (k.key('KeyA')) move.sub(this.right);
     if (move.lengthSq() > 1) move.normalize();
 
     this.raycaster.setFromCamera(k.pointer, this.camera);
@@ -1193,7 +1222,10 @@ export class Game {
     this.heroInput.dodge = k.keyPressed('Space') || k.keyPressed('ShiftLeft');
     this.heroInput.special = k.keyPressed('KeyR');
     // Turning the camera: hold Q / E, or drag with the middle mouse button. Scroll to zoom.
-    const turn = (k.key('KeyQ') ? 1 : 0) - (k.key('KeyE') ? 1 : 0);
+    // Like Roblox: the left/right arrow keys turn the camera too.
+    const turn = (k.key('KeyQ') || k.key('ArrowLeft') ? 1 : 0) - (k.key('KeyE') || k.key('ArrowRight') ? 1 : 0);
+    // Dragging with the right (or middle) button up and down tilts the view.
+    this.camPitch = THREE.MathUtils.clamp(this.camPitch + k.dragY * 0.25, -22, 26);
     this.camYaw += turn * 100 * this.lastDt - k.dragX * 0.35 - k.swipeX * 0.25;
     if (k.wheel) this.camZoom = THREE.MathUtils.clamp(this.camZoom * (1 + k.wheel * 0.08), 0.65, 1.45);
     if (turn || k.dragX || k.swipeX) this.tipsShown.add('camera');
@@ -1202,8 +1234,8 @@ export class Game {
     if (this.looking) {
       this.camPan.addScaledVector(move, 14 * this.lastDt);
       const c = this.crypt;
-      this.camPan.x = THREE.MathUtils.clamp(this.camPan.x, -c.halfX - this.hero.position.x, c.halfX - this.hero.position.x);
-      this.camPan.z = THREE.MathUtils.clamp(this.camPan.z, -c.halfZ - this.hero.position.z, c.halfZ - this.hero.position.z);
+      this.camPan.x = THREE.MathUtils.clamp(this.camPan.x, c.center.x - c.halfX - this.hero.position.x, c.center.x + c.halfX - this.hero.position.x);
+      this.camPan.z = THREE.MathUtils.clamp(this.camPan.z, c.center.z - c.halfZ - this.hero.position.z, c.center.z + c.halfZ - this.hero.position.z);
       move.set(0, 0, 0);
       this.tipsShown.add('look');
     } else {
@@ -1496,15 +1528,26 @@ export class Game {
     this.dark = 1;
     this.crypt.torches.lit = 0;
     const p = this.crypt.heroStart.clone().add(new THREE.Vector3(1.8, 0, -1.6));
-    const light = new THREE.PointLight('#ff9a3c', 3, 7, 2);
+    const light = new THREE.PointLight('#ff9a3c', 0, 7, 2);
     light.position.copy(p).setY(1.4);
     this.scene.add(light);
     // A standing torch, cold until the hero lights it.
     const torch = new THREE.Group();
     const model = this.assets.piece('torch_lit');
+    // Cold and charred until lit: dark copies of its materials, swapped back on lighting.
+    const swaps: { mesh: THREE.Mesh; lit: THREE.Material }[] = [];
     model.traverse((o) => {
       o.castShadow = true;
+      if (o instanceof THREE.Mesh) {
+        const cold = (o.material as THREE.MeshStandardMaterial).clone();
+        cold.color.set('#2c2a2a');
+        cold.emissive.set('#000000');
+        cold.map = null;
+        swaps.push({ mesh: o, lit: o.material as THREE.Material });
+        o.material = cold;
+      }
     });
+    this.brazierSwaps = swaps;
     torch.add(model);
     torch.position.copy(p);
     torch.scale.setScalar(1.3);
@@ -1521,12 +1564,15 @@ export class Game {
     const t = this.time;
     const near = b.position.distanceTo(this.hero.position) < 2.4;
     if (!b.lit) {
-      b.light.intensity = 2.5 + Math.sin(t * 6) * 0.8;
-      if (Math.random() < 0.3) this.glow.spawn({ x: b.position.x, y: 0.4, z: b.position.z, vy: 0.6, life: 0.6, size: 0.08, sizeEnd: 0.01, color: this.fireColor, intensity: 2 });
+      // Unlit: no fire, just a faint cold light so you can see where it stands.
+      b.light.color.set('#9fb4ff');
+      b.light.intensity = 3.2;
       if (near) this.tip('torch', 'Press <kbd>F</kbd> to light the torch', 8);
       if (near && (this.input.keyPressed('KeyF') || this.input.keyPressed('KeyJ') || this.input.buttonPressed(0))) {
         b.lit = true;
         this.openingDone = true;
+        for (const sw of this.brazierSwaps) sw.mesh.material = sw.lit;
+        b.light.color.set('#ff9a3c');
         this.ui.hint(null);
         this.audio.play('cast');
         this.later(0.2, () => this.audio.play('clear'));
@@ -1695,6 +1741,31 @@ export class Game {
     }
   }
 
+  /** A monster asleep in an ambush room the hero hasn't entered yet. */
+  private waitingInAmbush(e: Enemy): boolean {
+    return this.ambushes.some((a) => !a.sprung && a.monsters.includes(e));
+  }
+
+  /** Walking into an ambush room wakes its monsters. */
+  private updateAmbushes(): void {
+    const p = this.hero.position;
+    for (const a of this.ambushes) {
+      const r = a.encounter.room;
+      if (a.sprung || p.x < r.x0 + 1 || p.x > r.x1 - 1 || p.z < r.z0 + 1 || p.z > r.z1 - 1) continue;
+      a.sprung = true;
+      this.ui.hint(a.encounter.shout, 3.5);
+      this.audio.play('rise');
+      this.shake(0.25);
+      a.monsters.forEach((e, i) => {
+        this.later(0.2 + i * 0.3, () => {
+          if (!e.alive) return;
+          e.rise(false);
+          this.puff(e.position, 14);
+        });
+      });
+    }
+  }
+
   /** Spike traps: a sharp poke and a hop back if the hero steps on one. */
   private updateHazards(dt: number): void {
     this.hazardCooldown -= dt;
@@ -1803,7 +1874,7 @@ export class Game {
     let color = '#ffc35a';
     if (this.brazier && !this.brazier.lit) goal = this.brazier.position;
     else if (this.step === 'explore') goal = this.crypt.altar.position;
-    else if (this.step === 'cleared' && this.crypt.door.isOpen) goal = new THREE.Vector3(0, 0, -this.crypt.halfZ + 1);
+    else if (this.step === 'cleared' && this.crypt.door.isOpen) goal = this.crypt.doorAt.clone().add(new THREE.Vector3(0, 0, 1));
     else if (this.step === 'fight') {
       // Only when every monster is far away (or behind the hero), point to the closest.
       const near = this.nearestEnemy(hero.position, 7);
@@ -1818,7 +1889,17 @@ export class Game {
     mat.opacity = THREE.MathUtils.damp(mat.opacity, show ? 0.75 + Math.sin(this.time * 5) * 0.2 : 0, 10, dt);
     if (!goal) return;
     mat.color.set(color).multiplyScalar(1.6);
-    const dir = this.tmp.copy(goal).sub(hero.position).setY(0).normalize();
+    let dir = this.tmp.copy(goal).sub(hero.position).setY(0).normalize();
+    if (this.crypt.connected) {
+      if (!this.guideNav || this.guideNav.grid !== this.crypt || this.guideGoal.distanceToSquared(goal) > 0.25 || (this.guideTimer -= dt) < 0) {
+        if (!this.guideNav || this.guideNav.grid !== this.crypt) this.guideNav = { grid: this.crypt, nav: new NavGrid(this.crypt.colliders, 0.7) };
+        this.guideNav.nav.update(goal);
+        this.guideGoal.copy(goal);
+        this.guideTimer = 1;
+      }
+      const step = this.guideNav.nav.direction(hero.position, this.guideDir);
+      if (step) dir = this.tmp.copy(step);
+    }
     const pulse = 2.9 + Math.sin(this.time * 5) * 0.2;
     // Floats just above the altar's steps so they can't hide it.
     this.arrow.position.set(hero.position.x + dir.x * pulse, 0.62, hero.position.z + dir.z * pulse);
@@ -2243,8 +2324,10 @@ export class Game {
   /** Golden motes drifting from the altar to the open door. */
   private guideToDoor(dt: number): void {
     if (Math.random() > dt * 30) return;
-    const z = -3.5 - Math.random() * (this.crypt.halfZ - 4.5);
-    this.glow.spawn({ x: (Math.random() - 0.5) * 0.8, y: 0.2, z, vz: -1.6, vy: 0.4, life: 1.2, size: 0.12, sizeEnd: 0.02, color: this.gold, intensity: 3 });
+    const a = this.crypt.altar.position;
+    const d = this.crypt.doorAt;
+    const z = a.z - 3.5 - Math.random() * Math.max(0, a.z - 3.5 - (d.z + 1));
+    this.glow.spawn({ x: d.x + (Math.random() - 0.5) * 0.8, y: 0.2, z, vz: -1.6, vy: 0.4, life: 1.2, size: 0.12, sizeEnd: 0.02, color: this.gold, intensity: 3 });
   }
 
   // ───────────────────────── Screen-space UI ─────────────────────────
@@ -2270,7 +2353,7 @@ export class Game {
 
     if (this.paused) return;
     if (this.step === 'cleared' && this.crypt.door.isOpen) {
-      const s = this.toScreen(new THREE.Vector3(0, 0, -this.crypt.halfZ + 1.4), 0.2);
+      const s = this.toScreen(this.crypt.doorAt.clone().add(new THREE.Vector3(0, 0, 1.4)), 0.2);
       const next = LEVELS[this.route[this.stage + 1]];
       this.ui.prompt(!next ? 'Escape!' : next.boss ? 'To the King' : 'Next hall', s.x, s.y);
     } else {
@@ -2399,9 +2482,9 @@ export class Game {
     while (this.dustTimer <= 0) {
       this.dustTimer += 0.05;
       this.dust.spawn({
-        x: (Math.random() * 2 - 1) * (this.crypt.halfX - 1),
+        x: this.crypt.center.x + (Math.random() * 2 - 1) * (this.crypt.halfX - 1),
         y: 0.4 + Math.random() * 3.6,
-        z: (Math.random() * 2 - 1) * (this.crypt.halfZ - 1),
+        z: this.crypt.center.z + (Math.random() * 2 - 1) * (this.crypt.halfZ - 1),
         vx: (Math.random() - 0.5) * 0.12,
         vy: (Math.random() - 0.3) * 0.08,
         vz: (Math.random() - 0.5) * 0.12,

@@ -7,6 +7,8 @@ export class Input {
   pointerActive = false;
   /** Sideways mouse movement while the middle button is held, since the last frame. */
   dragX = 0;
+  /** Up/down mouse movement while the right or middle button is held. */
+  dragY = 0;
   /** Scroll wheel movement since the last frame (positive = toward the player = zoom out). */
   wheel = 0;
   /** Sideways trackpad swipe since the last frame. */
@@ -64,6 +66,7 @@ export class Input {
   /** Call at the end of every frame. */
   endFrame(): void {
     this.dragX = 0;
+    this.dragY = 0;
     this.wheel = 0;
     this.swipeX = 0;
     this.rightTap = false;
@@ -97,7 +100,10 @@ export class Input {
   };
 
   private onPointerMove = (e: PointerEvent): void => {
-    if (this.buttons[1] || this.buttons[2]) this.dragX += e.movementX;
+    if (this.buttons[1] || this.buttons[2]) {
+      this.dragX += e.movementX;
+      this.dragY += e.movementY;
+    }
     if (this.buttons[2]) this.rightTravel += Math.abs(e.movementX) + Math.abs(e.movementY);
     this.updatePointer(e);
   };

@@ -7,6 +7,7 @@ import type { Particles } from './particles';
 import { Runes, type RunePath } from './runes';
 import { Colliders, KitPlacer } from './static-world';
 import { Torches } from './torches';
+import { buildDungeon, type Encounter } from './dungeon';
 
 /** Interior half extents. Walls sit on the boundary, one unit thick. */
 export const ROOM = { halfX: 16, halfZ: 12 };
@@ -37,9 +38,19 @@ export interface Crypt {
   halfX: number;
   halfZ: number;
   outdoor: boolean;
+  /** Where the golden door stands (the hero leaves through it). */
+  doorAt: THREE.Vector3;
+  /** The middle of the whole level. */
+  center: THREE.Vector3;
+  /** Several rooms joined by corridors (the camera roams freely). */
+  connected: boolean;
+  /** Rooms whose monsters wake when the hero walks in. */
+  encounters: Encounter[];
 }
 
 const QUARTER = Math.PI / 2;
+/** The scene index of the connected dungeon (see dungeon.ts). */
+export const DUNGEON_SCENE = 7;
 
 interface Theme {
   /** Chance per 4x4 floor slot of a plain large tile, rocky tile, dirt, or small mixed tiles. */
@@ -354,6 +365,8 @@ const THEMES: Theme[] = [
 
 /** Builds one of the four halls. */
 export function buildCrypt(assets: Assets, embers: Particles, themeIndex = 0): Crypt {
+  // Scene 7 is a connected dungeon of several rooms, built separately.
+  if (themeIndex === DUNGEON_SCENE) return buildDungeon(assets, embers, themeIndex);
   const theme = THEMES[themeIndex] ?? THEMES[0];
   const hx = theme.half?.[0] ?? ROOM.halfX;
   const hz = theme.half?.[1] ?? ROOM.halfZ;
@@ -549,5 +562,9 @@ export function buildCrypt(assets: Assets, embers: Particles, themeIndex = 0): C
     halfX: hx,
     halfZ: hz,
     outdoor: !!out,
+    doorAt: new THREE.Vector3(0, 0, -hz),
+    center: new THREE.Vector3(),
+    connected: false,
+    encounters: [],
   };
 }

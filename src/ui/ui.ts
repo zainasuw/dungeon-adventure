@@ -249,12 +249,13 @@ export class Ui {
         </ol>
         <p class="howto__goal">Collect all <b>4 pillars</b> to escape and win.</p>
         <div class="keys">
-          ${key('W A S D', 'Walk (arrow keys work too)')}
+          ${key('W A S D', 'Walk (↑ ↓ work too)')}
           ${key('F', 'Attack, or click (it aims for you)')}
           ${key('G', 'Special move, or right-click')}
           ${key('Space', 'Dodge')}
           ${key('R', 'Hero power')}
-          ${key('Q / E', 'Turn the camera (or right-drag, or swipe)')}
+          ${key('Right-drag', 'Turn and tilt the camera (like Roblox)')}
+          ${key('← → / Q E', 'Turn the camera')}
           ${key('Tab', 'Hold to look around the room')}
           ${key('Scroll', 'Zoom in and out')}
           ${key('H', 'Drink a potion')}

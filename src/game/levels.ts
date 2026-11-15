@@ -109,6 +109,18 @@ export const LEVELS: Level[] = [
     waves: [['runt', 'runt', 'runt'], ['skeleton', 'brute']],
     potions: [[-14, -9], [14, 9], [-3, 11.5]],
   },
+  {
+    // 7. The Old Crypt: a connected dungeon (entrance, guard room, treasure room, altar room).
+    view: { yaw: 0, pitch: 46, distance: 19 },
+    intro: { yaw: 0, pitch: 30, distance: 16, focus: [0, 1, 18] },
+    pillar: '',
+    hall: 'The Old Crypt',
+    mood: 1,
+    crystal: '#ffd166',
+    sleepers: ['runt', 'skeleton', 'runt', 'skeleton'],
+    waves: [['runt', 'runt'], ['skeleton', 'runt']],
+    potions: [[3.6, 16.6], [-8.4, -4.6], [27.8, -1.2], [-8, -24.4]],
+  },
 ];
 
 /** The four pillars, in the order they're won (from the original assignment). */
@@ -123,7 +135,7 @@ export const PILLARS = [
 export const PILLAR_HALLS = PILLARS.length;
 
 /** Scene indexes (into LEVELS) for a run: four pillar halls, then the boss. */
-export const DEFAULT_ROUTE = [0, 5, 2, 6, 4];
+export const DEFAULT_ROUTE = [7, 5, 2, 6, 4];
 
 export type DifficultyId = 'easy' | 'normal' | 'hard';
 
