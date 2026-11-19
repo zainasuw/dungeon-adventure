@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { insideAnotherPage } from './host';
 
 /** Which kind of controls the player used last: keyboard and mouse, a touch screen, or a game controller. */
 export type InputMode = 'kbm' | 'touch' | 'pad';
@@ -306,6 +307,8 @@ export class Input {
     // and Enter press buttons, arrows pick. Only in play do we stop the browser.
     const onButton = e.target instanceof HTMLButtonElement || e.target instanceof HTMLAnchorElement;
     if (!this.menuOpen && !onButton && ['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Tab'].includes(e.code)) e.preventDefault();
+    // Inside another page, the keys that would scroll that page stay with the game.
+    if (insideAnotherPage && (['PageUp', 'PageDown', 'Home', 'End', 'ArrowUp', 'ArrowDown'].includes(e.code) || (e.code === 'Space' && !onButton))) e.preventDefault();
     if (this.menuOpen && e.code !== 'Escape') return;
     if (!this.down.has(e.code)) this.pressed.add(e.code);
     this.down.add(e.code);

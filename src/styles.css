@@ -2298,7 +2298,7 @@ body.touch-mode button kbd {
     bottom: 8px;
     margin: 0;
     padding: 0 12px;
-    font-size: 10px;
+    font-size: 12px;
     text-align: center;
   }
 
@@ -2352,7 +2352,7 @@ body.touch-mode button kbd {
   }
 
   .quest__hall {
-    font-size: 11px;
+    font-size: 12px;
   }
 
   .quest__objective {
@@ -2708,6 +2708,23 @@ body.touch-mode button kbd {
 }
 
 /* One helpful tip on the defeat card. */
+.card__seed {
+  margin: -6px 0 0;
+  font: 500 13px var(--sans);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.04em;
+  color: var(--ink-dim);
+}
+
+.link-btn--inline {
+  display: inline;
+  padding: 0;
+  font: inherit;
+  letter-spacing: 0.01em;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
 .card__tip {
   margin: 0;
   padding: 10px 14px;
@@ -2898,7 +2915,7 @@ body.menu-open .crosshair {
   }
 
   .quest__hall {
-    font-size: 11px;
+    font-size: 12px;
   }
 
   .quest__pillars {
@@ -3085,5 +3102,57 @@ body.menu-open .crosshair {
     top: 40%;
     width: 44px;
     height: 44px;
+  }
+}
+
+/* Two cards in the shop keep the three-card width instead of stretching, centred. */
+@media (min-width: 861px) {
+  .shop-row {
+    grid-template-columns: repeat(var(--n), minmax(0, 340px));
+    justify-content: center;
+  }
+}
+
+/* A monster waiting out of view for its first blow: a dim, still warning. */
+.threat--dim {
+  opacity: 0.45;
+}
+.threat--dim span {
+  animation: none;
+}
+
+/* The pillar names wrap on narrow cards instead of pushing the card wider. */
+.pillar-row {
+  flex-wrap: wrap;
+  row-gap: 10px;
+}
+.card {
+  min-width: 0;
+}
+
+/* The sound button: top-right on every screen; beside the pause button during play. */
+.sound-btn {
+  position: absolute;
+  top: 18px;
+  right: 18px;
+  z-index: 9;
+}
+.sound-btn--beside-pause {
+  right: 80px;
+}
+.sound-btn .icon {
+  width: 26px;
+  height: 26px;
+}
+.sound-btn[aria-pressed='true'] {
+  color: var(--ink-dim);
+}
+@media (max-width: 640px) {
+  .sound-btn {
+    top: 10px;
+    right: 10px;
+  }
+  .sound-btn--beside-pause {
+    right: 72px;
   }
 }

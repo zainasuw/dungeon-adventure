@@ -170,8 +170,8 @@ export const PATH_POOL = [5, 2, 6, 3, 1];
 export type PathReward = 'potions' | 'coins' | 'heal';
 
 /** A fresh run: the crypt, three halls (replaced by the player's door picks), then the King. */
-export function randomRoute(): number[] {
-  const pool = [...PATH_POOL].sort(() => Math.random() - 0.5);
+export function randomRoute(rng?: { shuffle<T>(items: readonly T[]): T[] }): number[] {
+  const pool = rng ? rng.shuffle(PATH_POOL) : [...PATH_POOL].sort(() => Math.random() - 0.5);
   return [7, pool[0], pool[1], pool[2], 4];
 }
 
@@ -189,12 +189,29 @@ export interface Difficulty {
   dropLastWave: boolean;
   /** Multiplier on monsters' wind-up time before a blow (longer = more time to react). */
   windup: number;
+  /** How many monsters may swing at the hero at the same time. */
+  attackTickets: number;
+  /** Chance a smashed crate or barrel holds a potion. */
+  crateDrop: number;
+  /** Health multiplier for an elite (the last wave's leader). */
+  eliteHp: number;
+  /** Forest defence: seconds between reinforcements, and how many may be alive at once. */
+  defendEvery: number;
+  defendCap: number;
+  /** Who the Skeleton King calls at each health milestone. */
+  bossGuards: EnemyKind[];
+  /** Bones the enraged King throws with each slam. */
+  kingBones: number;
+  /** Job summons use the weakest monster only. */
+  gentleJobs: boolean;
+  /** The game drinks a potion for you when health runs low. */
+  autoPotion: boolean;
 }
 
 export const DIFFICULTIES: Record<DifficultyId, Difficulty> = {
-  easy: { id: 'easy', label: 'Easy', hint: 'Gentle monsters, lots of potions. Great for kids.', enemyHp: 0.7, enemyDamage: 0.45, potionDrop: 0.45, dropLastWave: true, windup: 1.5 },
-  normal: { id: 'normal', label: 'Normal', hint: 'A fair fight.', enemyHp: 1, enemyDamage: 1, potionDrop: 0.25, dropLastWave: false, windup: 1 },
-  hard: { id: 'hard', label: 'Hard', hint: 'For brave souls only.', enemyHp: 1.3, enemyDamage: 1.5, potionDrop: 0.15, dropLastWave: false, windup: 1 },
+  easy: { id: 'easy', label: 'Easy', hint: 'Gentle monsters, lots of potions. Great for kids.', enemyHp: 0.7, enemyDamage: 0.45, potionDrop: 0.45, dropLastWave: true, windup: 1.5, attackTickets: 1, crateDrop: 0.5, eliteHp: 1.5, defendEvery: 8, defendCap: 4, bossGuards: ['runt', 'runt'], kingBones: 6, gentleJobs: true, autoPotion: true },
+  normal: { id: 'normal', label: 'Normal', hint: 'A fair fight.', enemyHp: 1, enemyDamage: 1, potionDrop: 0.25, dropLastWave: false, windup: 1, attackTickets: 2, crateDrop: 0.35, eliteHp: 2.2, defendEvery: 6, defendCap: 6, bossGuards: ['runt', 'skeleton', 'runt'], kingBones: 10, gentleJobs: false, autoPotion: false },
+  hard: { id: 'hard', label: 'Hard', hint: 'For brave souls only.', enemyHp: 1.3, enemyDamage: 1.5, potionDrop: 0.15, dropLastWave: false, windup: 1, attackTickets: 3, crateDrop: 0.35, eliteHp: 2.2, defendEvery: 6, defendCap: 6, bossGuards: ['runt', 'skeleton', 'runt'], kingBones: 10, gentleJobs: false, autoPotion: false },
 };
 
 export const MAX_POTIONS = 5;
@@ -217,6 +234,10 @@ export interface SaveData {
   /** Which hall of the run (0 = first) and the run's halls in order. */
   stage?: number;
   route?: number[];
+  /** The run's random seed, so a refresh continues the same run of luck. */
+  seed?: number;
+  /** The loot director's counters (heart pity, per-hall caps). */
+  loot?: { misses: number; heartsThisHall: number; potionCratesThisHall: number };
   /** Max health bought from the merchant. */
   bonusHp?: number;
 }

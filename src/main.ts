@@ -4,6 +4,7 @@ import '@fontsource-variable/outfit';
 import './styles.css';
 import { Assets } from './core/assets';
 import { Game } from './game';
+import { tellHost } from './core/host';
 
 const loading = document.getElementById('loading')!;
 const fill = document.getElementById('loading-fill')!;
@@ -43,6 +44,7 @@ async function boot(): Promise<void> {
   window.clearInterval(tipTimer);
   if (import.meta.env.DEV) Object.assign(window, { game });
   loading.classList.add('loading--done');
+  tellHost('ready');
   loading.addEventListener('transitionend', () => loading.remove(), { once: true });
 }
 

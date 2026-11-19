@@ -195,6 +195,16 @@ export class Enemy extends Character {
   chargeLeft = 0;
   /** First person: when this monster was first refused an attack for being out of view (see the game's mayAttack). */
   offscreenSince = -1;
+  /** When the player first had it in frame after it appeared (telemetry: sight to first swing). */
+  firstSeenAt = -1;
+  /** Has the player been warned of this one (a rattle when it first comes into view)? */
+  announced = true;
+  /** How many times the game put off its entrance for lack of a fair spot. */
+  spawnRetries = 0;
+  /** Test bookkeeping: when and where it came in, and whether its stuck check ran. */
+  spawnedAt = -1;
+  readonly spawnedWhere = new THREE.Vector3();
+  stuckChecked = false;
   /** Frontal hits stopped by the shield in a row; the guard breaks after a few. */
   blocksInRow = 0;
   /** True while the red warning lane should show. */
@@ -247,38 +257,82 @@ export class Enemy extends Character {
     this.animator.play('Idle_Combat', { fade: 0 });
   }
 
-  /** How long the glowing summoning ring shows before the monster pops out of it. */
-  static readonly SUMMON_TIME = 0.9;
-  private static readonly POP_TIME = 0.28;
+  /**
+   * How a monster comes into the world. Timings follow the readable-telegraph rule
+   * (a tell, then the body, then a pause before the first swing):
+   * - grave: a tell under the ground (TELL), an upright rise out of the earth (RISE),
+   *   a shake awake while turning to face the hero (AWAKEN), then slow first steps;
+   * - wake: standing in place, shakes awake (the King, sleepers found in the open);
+   * - walk: already on its feet out of sight, walks in slowly and speeds up.
+   */
+  static readonly TELL = 0.8;
+  static readonly RISE = 2.2;
+  /** Depth the body starts at, in model units (the rig is ~2 m tall at scale 1). */
+  private static readonly SUNK = 1.9;
+  /** The rise cannot be hurt until the torso clears the ground. */
+  private static readonly HITTABLE_DEPTH = 0.6;
+  private riseMode: 'grave' | 'wake' | 'walk' = 'grave';
+  /** Seconds since the rise began, driving the phases above. */
+  private awakenEnd = 0;
+  /** 0..1: a freshly risen skeleton shuffles stiffly, then picks up speed as it comes for you. */
+  wake = 1;
+  /** Seconds left of gentle collision resolve after rising inside a grave's footprint. */
+  collisionEase = 0;
+  /** Where to turn while awakening (the hero), set by the game. */
+  readonly faceTarget = new THREE.Vector3();
   private readonly fullScale = new THREE.Vector3();
 
-  /**
-   * Summoned like in Hades: a ring glows on the floor first (the game draws
-   * it), so you can see where a monster is coming; then it pops out ready to
-   * fight. No lying on the floor and climbing up.
-   */
-  rise(): void {
+  rise(mode: 'grave' | 'wake' | 'walk' = 'grave'): void {
     if (this.state !== 'rising') this.fullScale.copy(this.model.scale);
+    this.spawnedWhere.copy(this.position);
     this.state = 'rising';
     this.stateTime = 0;
-    this.root.visible = false;
-    this.animator.play('Idle_Combat', { fade: 0, restart: true });
+    this.awakenEnd = 0;
+    this.riseMode = mode;
+    this.model.scale.copy(this.fullScale);
+    this.root.visible = true;
+    if (mode === 'walk') {
+      this.wakeUp();
+      return;
+    }
+    // Sunk in the ground (grave) or standing still (wake), inert until the awaken clip.
+    this.model.position.y = mode === 'grave' ? -Enemy.SUNK * this.fullScale.y : 0;
+    this.animator.play('Skeleton_Inactive_Standing_Pose', { fade: 0, restart: true });
+    this.setGlow((n) => n.endsWith('_Eyes'), this.def.eyes, 0);
   }
 
-  /**
-   * Steps into the room already awake (from a niche or a corridor), instead of
-   * popping out of a summoning circle.
-   */
+  /** Leaves the rising state and starts slow, speeding up over a few seconds. */
+  private wakeUp(): void {
+    this.model.position.y = 0;
+    this.riseTilt = 0;
+    this.wake = 0.25;
+    this.cooldown = Math.max(this.cooldown, 1.2);
+    this.collisionEase = 1;
+    this.toChase();
+  }
+
+  /** Where the body is in its rise: 0 = fully sunk, 1 = feet on the ground. */
+  get riseProgress(): number {
+    if (this.state !== 'rising' || this.riseMode !== 'grave') return 1;
+    const t = this.stateTime - Enemy.TELL;
+    if (t <= 0) return 0;
+    const k = Math.min(1, t / Enemy.RISE);
+    return 1 - Math.pow(1 - k, 3);
+  }
+
+  /** Steps into the room already awake (from a niche or a corridor), slow at first. */
   emerge(): void {
     this.model.scale.copy(this.state === 'rising' ? this.fullScale : this.model.scale);
     this.root.visible = true;
-    this.toChase();
-    this.cooldown = Math.max(this.cooldown, 0.8);
+    this.wakeUp();
   }
 
-  /** True while the summoning ring is still showing and the monster isn't out yet. */
+  /** True while the monster is not yet out: hidden, or still mostly under the ground. */
   get summoning(): boolean {
-    return this.state === 'dormant' || (this.state === 'rising' && this.stateTime < Enemy.SUMMON_TIME);
+    if (this.state === 'dormant') return true;
+    if (this.state !== 'rising') return false;
+    if (this.riseMode === 'grave') return this.model.position.y < -Enemy.HITTABLE_DEPTH * this.fullScale.y;
+    return this.stateTime < 0.3;
   }
 
   /** Applies a hit. Returns the damage dealt, 0 if blocked, -1 if it can't be hurt right now. */
@@ -302,6 +356,7 @@ export class Enemy extends Character {
     this.blocksInRow = 0;
     this.hp = Math.max(0, this.hp - amount);
     this.flash('#ffffff', 0.12);
+    this.jolt(from, Math.min(1.4, 0.6 + amount / 40));
     this.knock.copy(this.position).sub(from).setY(0);
     if (this.knock.lengthSq() > 0.0001) this.knock.normalize().multiplyScalar(knockback / Math.sqrt(this.def.scale));
     if (this.hp === 0) {
@@ -354,18 +409,24 @@ export class Enemy extends Character {
         if (this.deadTime > 1.8) this.position.y = -(this.deadTime - 1.8) * 0.9;
         return;
       case 'rising': {
-        const t = this.stateTime - Enemy.SUMMON_TIME;
-        if (t < 0) return;
-        this.root.visible = true;
-        // Pops out a little too big, then settles (an "ease out back").
-        const k = Math.min(1, t / Enemy.POP_TIME);
-        const c = 2.2;
-        const pop = 1 + (c + 1) * Math.pow(k - 1, 3) + c * Math.pow(k - 1, 2);
-        this.model.scale.copy(this.fullScale).multiplyScalar(Math.max(0.05, pop));
-        if (k >= 1) {
-          this.model.scale.copy(this.fullScale);
-          this.toChase();
+        const t = this.stateTime;
+        if (this.riseMode === 'grave') {
+          const k = this.riseProgress;
+          this.model.position.y = -Enemy.SUNK * this.fullScale.y * (1 - k);
+          // Leans forward as it comes up, so the skull and a hand break the earth before the body.
+          this.riseTilt = 0.32 * (1 - k) * Math.min(1, k * 4);
+          // The eyes light up as the head clears the ground (under the floor nobody would see them).
+          this.setGlow((n) => n.endsWith('_Eyes'), this.def.eyes, 4 * Math.min(1, Math.max(0, (k - 0.45) / 0.3)));
         }
+        const awakenAt = this.riseMode === 'grave' ? Enemy.TELL + Enemy.RISE : Enemy.TELL;
+        if (t >= awakenAt && this.awakenEnd === 0) {
+          const a = this.animator.play('Skeletons_Awaken_Standing', { fade: 0.12, loop: false, restart: true, speed: 0.9 });
+          this.awakenEnd = awakenAt + a.getClip().duration / 0.9;
+          this.setGlow((n) => n.endsWith('_Eyes'), this.def.eyes, 4);
+        }
+        // Turns to face the hero while it shakes awake (no snap).
+        if (this.awakenEnd > 0) this.facing = dampAngle(this.facing, Math.atan2(this.faceTarget.x - this.position.x, this.faceTarget.z - this.position.z), 2.5, dt);
+        if (this.awakenEnd > 0 && t >= this.awakenEnd) this.wakeUp();
         return;
       }
       case 'hurt':
@@ -466,7 +527,8 @@ export class Enemy extends Character {
       }
     }
 
-    const speed = def.speed * this.speedBoost;
+    if (this.wake < 1) this.wake = Math.min(1, this.wake + dt / 3.5);
+    const speed = def.speed * this.speedBoost * this.wake;
     this.velocity.x = damp(this.velocity.x, this.steer.x * speed, 8, dt);
     this.velocity.z = damp(this.velocity.z, this.steer.z * speed, 8, dt);
     this.position.addScaledVector(this.velocity, dt);
@@ -476,7 +538,7 @@ export class Enemy extends Character {
     const turnRate = this.def.block > 0 && dist < 3.5 ? 2.2 : 9;
     if (faceDir.lengthSq() > 0.01) this.facing = dampAngle(this.facing, Math.atan2(faceDir.x, faceDir.z), turnRate, dt);
     if (moving) {
-      const fast = this.def.kind === 'runt';
+      const fast = this.def.kind === 'runt' && this.wake > 0.7;
       this.animator.play(fast ? 'Running_C' : 'Walking_D_Skeletons', { speed: fast ? 1 : 1.25 * (speed / 3), fade: 0.15 });
     } else {
       this.animator.play('Idle_Combat', { fade: 0.2 });

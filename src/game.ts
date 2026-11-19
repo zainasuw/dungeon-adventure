@@ -1,6 +1,9 @@
 import * as THREE from 'three';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { HERO_CLASSES, type Ability, type ComboStep, type HeroClassId } from './actors/classes';
+import { Rng } from './core/rng';
+import { LootDirector } from './game/loot';
+import { chooseGrave, chooseSpawnSpot, visibleFrom, type SpawnContext } from './game/spawning';
 import { Enemy, ENEMIES, type EnemyKind } from './actors/enemy';
 import { Hero, type HeroEvents, type HeroInput } from './actors/hero';
 import type { Assets } from './core/assets';
@@ -53,6 +56,11 @@ interface Zone {
 interface Potion {
   object: THREE.Group;
   base: THREE.Vector3;
+  /** potion: a flask for the bag; heart: a small heal on the spot; crystal: the run's one max-health upgrade. */
+  kind: 'potion' | 'heart' | 'crystal';
+  age: number;
+  /** The hero already got the "bag full" bump from this flask; cleared when they step away. */
+  bumped?: boolean;
 }
 
 /** One lantern, book or crystal of a hall's job. */
@@ -73,6 +81,8 @@ interface JobItem {
 
 interface Crate {
   object: THREE.Object3D;
+  /** Its number in the hall, so the loot director can plan which crates may hold a potion. */
+  index: number;
   box: { minX: number; maxX: number; minZ: number; maxZ: number };
   position: THREE.Vector3;
 }
@@ -144,6 +154,13 @@ export class Game {
   private pillars = 0;
   private potions = 1;
   private levelStartPotions = 1;
+  private levelStartKills = 0;
+  /** How many times this hall has been retried after a fall (0 = first try). */
+  private hallAttempt = 0;
+  private retrying = false;
+  /** Crates smashed and the chest opened in this hall, kept across retries so a fall can't refill them. */
+  private smashedCrates = new Set<number>();
+  private chestOpened = false;
   private kills = 0;
   private potionsUsed = 0;
   private playTime = 0;
@@ -152,8 +169,35 @@ export class Game {
   private readonly rings = new Map<Enemy, THREE.Mesh>();
   /** The red lane a Shield Rammer shows before it charges. */
   private readonly lanes = new Map<Enemy, THREE.Mesh>();
-  /** Glowing summoning circles on the floor, shown just before a monster appears. */
-  private portals: { mesh: THREE.Mesh; at: THREE.Vector3; t: number; size: number }[] = [];
+  /** Disturbed earth where a skeleton rises from a grave: opens with the tell, settles after. */
+  private mounds: { mesh: THREE.Mesh; clods: THREE.Mesh[]; eyes: THREE.Color; at: THREE.Vector3; t: number; life: number; stir: boolean; base: number }[] = [];
+  private readonly clodGeometry = new THREE.TetrahedronGeometry(0.16, 0);
+  private readonly clodMaterial = new THREE.MeshStandardMaterial({ color: '#6b4e33', roughness: 1, flatShading: true });
+  private readonly moundTexture = Game.makeMoundTexture();
+  private readonly stirTexture = Game.makeStirTexture();
+  /** Every outcome roll in a run comes from one seed, split into streams (loot, spawns, shop). */
+  private seed = Rng.newSeed();
+  private rng = new Rng(this.seed);
+  private spawnRng = this.rng.stream('spawn');
+  /** Decides every drop: hearts by health and pity, potions by what the bag can hold. */
+  private loot = new LootDirector(this.rng.stream('loot'), DIFFICULTIES.normal);
+  /** Spots the player has just been near or looked at: monsters don't appear there for a while. */
+  private readonly recentlySeen: { x: number; z: number; t: number }[] = [];
+  private lastSpawn: THREE.Vector3 | null = null;
+  private lastAttackStart = -10;
+  /**
+   * The graveyard's restless graves: a few of the hall's sleepers lie in particular graves and
+   * wake when the hero comes near (something stirs under the soil first, then the rise), so
+   * monsters there feel disturbed rather than summoned. Chosen by the run's seed.
+   */
+  private restless: { grave: THREE.Vector3; spot: THREE.Vector3; enemy: Enemy; stirred: boolean; stirredAt: number; seenFor: number; woken: boolean; lastStir: number; lastRattle: number }[] = [];
+  private lastHeroPos = new THREE.Vector3();
+  private heroVel = new THREE.Vector3();
+  private lastRestlessWake = -10;
+  /** For tests: how each spawn was placed (tier 0 strict … 3 telegraphed in view, 4 forced). */
+  readonly spawnLog: { tier: number; d: number; visible: boolean; mode: string }[] = [];
+  /** For tests: what the run's economy and fights actually did. */
+  readonly telemetry = { hearts: 0, heartsPicked: 0, potionsFound: 0, potionsPicked: 0, bagFull: 0, drinks: 0, deaths: 0, hitsTaken: 0, damageTaken: 0, firstSwing: [] as number[], sightToSwing: [] as number[], blindFirstSwings: 0, stuck: 0, hpSamples: [] as number[] };
   private readonly portalGeometry = new THREE.PlaneGeometry(2.2, 2.2);
   private readonly portalTexture = Game.makePortalTexture();
   private readonly laneTexture = Game.makeLaneTexture();
@@ -162,6 +206,8 @@ export class Game {
   private merchant: { who: Character; props: THREE.Group; box: Crate['box']; items: ShopItem[] } | null = null;
   /** Max health bought at the shop (kept for the whole quest). */
   private bonusHp = 0;
+  /** The run's one heart crystal has been found. */
+  private crystalFound = false;
   private jobItems: JobItem[] = [];
   private readonly wispColor = new THREE.Color('#9dffb8');
   private jobNag = 0;
@@ -169,7 +215,6 @@ export class Game {
   private defendLeft = 0;
   private defendSpawn = 0;
   private defendWave = 0;
-  private readonly portalHot = new THREE.Color('#e9c2ff');
   private waves: EnemyKind[][] = [];
   private waveCooldown = 0;
   private projectiles: Projectile[] = [];
@@ -194,6 +239,9 @@ export class Game {
   private timers: Timer[] = [];
   private renew = { left: 0, rate: 0 };
   private hitStop = 0;
+  /** A spring offset on the camera after a hit (metres), pushed away from the blow. */
+  private readonly kick = new THREE.Vector3();
+  private readonly kickVel = new THREE.Vector3();
   private deadTimer = 0;
   private frameCount = 0;
   /** Tips already shown this session, so each one teaches once. */
@@ -355,6 +403,8 @@ export class Game {
   private readonly heroLight = new THREE.PointLight('#ffd9a8', 9, 11, 2);
   private readonly fog = new THREE.FogExp2('#0a0f1c', 0.02);
   private readonly dustColor = new THREE.Color('#d9c7a0');
+  /** Dust from disturbed earth: darker and browner than stone dust. */
+  private readonly earthColor = new THREE.Color('#6b4a2a');
   private readonly heroColor = new THREE.Color();
   private readonly heroHot = new THREE.Color();
   private readonly white = new THREE.Color('#ffffff');
@@ -362,7 +412,6 @@ export class Game {
   private readonly fireColor = new THREE.Color('#ff8a2a');
   private readonly smokeColor = new THREE.Color('#5a5560');
   private readonly moonDust = new THREE.Color('#bcd0ff');
-  private heartTexture: THREE.Texture | null = null;
   private readonly gold = new THREE.Color('#ffc35a');
   private readonly red = new THREE.Color('#ff4040');
   private readonly heal = new THREE.Color('#7dffa0');
@@ -461,11 +510,12 @@ export class Game {
       sound: (name) => this.audio.play(name),
       startQuest: (id, name, difficulty) => this.startQuest(id, name, difficulty),
       backToTitle: () => this.openTitle(),
+      replaySeed: () => this.startQuest(this.hero.def.id, this.heroName, this.difficulty.id, this.seed),
       resume: () => this.setPaused(false),
       restartLevel: () => this.restartLevel(),
       changeHero: () => this.openSelect(),
       toggleMute: () => {
-        this.audio.setMuted(!this.audio.muted);
+        this.setMuted(!this.audio.muted);
         return this.audio.muted;
       },
       toggleTilt: () => {
@@ -490,6 +540,15 @@ export class Game {
       }),
       cycleCamera: () => this.cycleCamera(false),
     });
+    // The sound choice is remembered between visits.
+    let savedMute = false;
+    try {
+      savedMute = localStorage.getItem('dungeon-adventure-muted') === '1';
+    } catch {
+      // Storage blocked: start with sound on.
+    }
+    this.audio.setMuted(savedMute);
+    this.ui.setMuted(savedMute);
 
     window.addEventListener('blur', () => {
       if (this.phase === 'play' && !this.paused) this.setPaused(true);
@@ -651,16 +710,28 @@ export class Game {
     this.ui.placeHeroTags(tags);
   }
 
-  private startQuest(id: HeroClassId, name: string, difficulty: DifficultyId): void {
+  /** Starts (or resumes) the run's luck from one seed; `?seed=` in the address replays a run. */
+  private seedRun(seed?: number): void {
+    const fromUrl = Number.parseInt(new URLSearchParams(location.search).get('seed') ?? '', 16);
+    this.seed = seed ?? (Number.isFinite(fromUrl) ? fromUrl >>> 0 : Rng.newSeed());
+    this.rng = new Rng(this.seed);
+    this.spawnRng = this.rng.stream('spawn');
+    this.loot = new LootDirector(this.rng.stream('loot'), this.difficulty);
+    this.spawnLog.length = 0;
+  }
+
+  private startQuest(id: HeroClassId, name: string, difficulty: DifficultyId, seed?: number): void {
     this.lost = null;
     this.openingDone = false;
     this.blessings = {};
     this.coins = 0;
     this.heroName = name;
     this.difficulty = DIFFICULTIES[difficulty];
-    this.route = randomRoute();
+    this.seedRun(seed);
+    this.route = randomRoute(this.rng.stream('route'));
     this.pathReward = null;
     this.bonusHp = 0;
+    this.crystalFound = false;
     this.stage = 0;
     this.level = this.route[0];
     this.pillars = 0;
@@ -685,7 +756,9 @@ export class Game {
     this.blessings = (save.blessings ?? {}) as BlessingLevels;
     this.coins = save.coins ?? 0;
     this.stage = save.stage ?? 0;
-    this.route = save.route?.length === 5 ? [...save.route] : randomRoute();
+    this.seedRun(save.seed);
+    this.loot.restore(save.loot);
+    this.route = save.route?.length === 5 ? [...save.route] : randomRoute(this.rng.stream('route'));
     this.route[this.stage] = save.level;
     this.pillars = Math.min(this.stage, PILLAR_HALLS);
     this.bonusHp = save.bonusHp ?? 0;
@@ -745,6 +818,8 @@ export class Game {
 
   private restartLevel(): void {
     this.potions = Math.max(this.levelStartPotions, 1);
+    this.kills = this.levelStartKills;
+    this.retrying = true;
     this.choosing = false;
     this.ui.hideScreen();
     this.ui.setHero(this.hero.def, this.heroName, this.hero.maxHp);
@@ -791,7 +866,20 @@ export class Game {
       stage: this.stage,
       route: this.route,
       bonusHp: this.bonusHp,
+      seed: this.seed,
+      loot: this.loot.state(),
     } satisfies SaveData);
+  }
+
+  /** Mutes or unmutes everything, updates the sound button, and remembers the choice. */
+  private setMuted(muted: boolean): void {
+    this.audio.setMuted(muted);
+    this.ui.setMuted(muted);
+    try {
+      localStorage.setItem('dungeon-adventure-muted', muted ? '1' : '0');
+    } catch {
+      // Storage blocked: the choice lasts for this visit only.
+    }
   }
 
   private stats(): QuestStats {
@@ -805,6 +893,8 @@ export class Game {
       potionsUsed: this.potionsUsed,
       time: this.playTime,
       coins: this.coins,
+      lostCoins: this.lost && this.lost.level === this.level ? this.lost.coins : 0,
+      seed: this.seed.toString(16).padStart(8, '0').toUpperCase(),
     };
   }
 
@@ -835,6 +925,28 @@ export class Game {
       enemy.facing = spot.facing;
       enemy.sleep();
     });
+    this.restless = [];
+    if (index === 5) {
+      // Three or four of the fourteen graves hold a sleeper that wakes when you come near. They are
+      // the hall's own sleepers moved into graves, so the hall has no more monsters than before.
+      const sleepers = this.enemies.filter((e) => e.state === 'dormant');
+      const count = Math.min(this.difficulty.gentleJobs ? 3 : 4, sleepers.length);
+      const graves = this.spawnRng.shuffle(Game.GRAVES).filter(([, gz]) => gz < 11).slice(0, count);
+      graves.forEach(([gx, gz], i) => {
+        const enemy = sleepers[i];
+        const grave = new THREE.Vector3(gx, 0, gz);
+        const spot = Game.graveSpot(gx, gz);
+        enemy.position.copy(spot);
+        this.restless.push({ grave, spot, enemy, stirred: false, stirredAt: -10, seenFor: 0, woken: false, lastStir: -10, lastRattle: -10 });
+      });
+    }
+    if (this.retrying) this.hallAttempt++;
+    else {
+      this.hallAttempt = 0;
+      this.smashedCrates.clear();
+      this.chestOpened = false;
+    }
+    this.retrying = false;
     this.placeChest();
     this.ambushes = this.crypt.encounters.map((encounter) => ({
       encounter,
@@ -851,10 +963,15 @@ export class Game {
     if (this.difficulty.dropLastWave && this.waves.length > 1) this.waves.pop();
 
     if (!live) return;
-    for (const [x, z] of level.potions) this.dropPotion(new THREE.Vector3(x, 0, z));
+    // Nothing lies glowing on the floor when you arrive: healing comes from fights (hearts),
+    // barrels and crates (potions) and the chest, as in Zelda, Diablo and Doom.
     this.placeCrates();
+    this.loot.newHall(this.crypt.crateSpots.length);
+    // One potion to find in the first hall on Easy: it teaches the pickup; later halls earn them.
+    if (this.stage === 0 && this.difficulty.id === 'easy' && level.potions[0]) this.dropPotion(new THREE.Vector3(level.potions[0][0], 0, level.potions[0][1]));
     this.placeJob();
     this.levelStartPotions = this.potions;
+    if (!this.hallAttempt) this.levelStartKills = this.kills;
     this.step = 'explore';
     this.hero.revive();
     this.hero.invulnerable = 0;
@@ -908,9 +1025,9 @@ export class Game {
     this.bossCalls = [0.66, 0.33];
     this.later(delay, () => {
       if (!king.alive) return;
-      this.summon(king, 2.2);
+      this.summon(king);
       this.audio.play('defeat');
-      this.later(Enemy.SUMMON_TIME, () => this.shake(0.4));
+      this.later(Enemy.TELL, () => this.shake(0.4));
       this.ui.bossBar('Skeleton King', 1);
       this.ui.objective('Defeat the Skeleton King! Dodge out of the red rings');
       this.later(1.5, () => this.tip('boss', 'Big red ring = a huge slam is coming. Press <kbd>Space</kbd> to dodge out!', 6));
@@ -929,7 +1046,7 @@ export class Game {
       this.ui.banner('The King roars', second ? 'Guards, again!' : 'Guards, to me!', second ? 'He is weakening. Keep going!' : 'Beat his guards, then strike the King');
       this.audio.play('rise');
       this.shake(0.35);
-      this.spawnWave(this.difficulty.id === 'easy' ? ['runt', 'runt'] : ['runt', 'skeleton', 'runt']);
+      this.spawnWave([...this.difficulty.bossGuards]);
     }
     if (f <= 0.5 && king.animSpeed === 1 && king.alive) {
       king.enrage();
@@ -941,8 +1058,15 @@ export class Game {
   private onBossDefeated(): void {
     this.boss = null;
     this.ui.bossBar(null, 0);
-    // Any guards left crumble with their king.
-    for (const e of this.enemies) if (e.alive) {
+    // Any guards left crumble with their king. One still rising out of the ground simply
+    // never arrives (hurt() refuses while summoning, which used to leave it alive but counted).
+    for (const e of this.enemies) {
+      if (!e.alive) continue;
+      if (e.summoning) {
+        e.alive = false;
+        e.root.visible = false;
+        continue;
+      }
       e.hurt(99999, e.position, 0);
       this.onEnemyDied(e);
     }
@@ -966,11 +1090,15 @@ export class Game {
   }
 
   private clearActors(): void {
+    this.restless = [];
     for (const e of this.enemies) this.removeEnemy(e);
     this.rings.clear();
     this.lanes.clear();
-    for (const p of this.portals) this.scene.remove(p.mesh);
-    this.portals = [];
+    for (const m of this.mounds) {
+      this.scene.remove(m.mesh);
+      for (const clod of m.clods) this.scene.remove(clod);
+    }
+    this.mounds = [];
     this.clearJob();
     this.removeMerchant();
     for (const p of this.projectiles) this.removeMesh(p.mesh);
@@ -1044,61 +1172,255 @@ export class Game {
     return enemy;
   }
 
-  /**
-   * Hades-style summoning: a purple circle glows on the floor with sparks
-   * rising from it, so you can see where a monster is coming, and about a
-   * second later the monster pops out in a puff of dark smoke.
-   */
-  private summon(e: Enemy, size = e.def.scale * 1.1): void {
-    if (!e.alive) return;
-    e.rise();
-    const mesh = new THREE.Mesh(
-      this.portalGeometry,
-      new THREE.MeshBasicMaterial({ map: this.portalTexture, color: this.portalColor, transparent: true, opacity: 0, depthWrite: false, blending: THREE.AdditiveBlending }),
-    );
-    mesh.rotation.x = -Math.PI / 2;
-    mesh.position.set(e.position.x, 0.05, e.position.z);
-    mesh.renderOrder = 2;
-    this.scene.add(mesh);
-    this.portals.push({ mesh, at: e.position.clone(), t: 0, size });
-    this.audio.play('summon');
-    this.tip('summon', 'A <b>purple circle</b> on the floor means a monster is about to appear there!', 4);
-    this.later(Enemy.SUMMON_TIME, () => {
-      if (!e.alive) return;
-      this.puff(e.position, 18);
-      this.burst(e.position.clone().setY(0.9), this.portalColor, 26, 3.5);
-      this.audio.play('rise');
-    });
+  /** A monster rises out of the floor where it stands (see below). */
+
+  /** The graveyard's graves (same rows as its props in crypt.ts). */
+  private static readonly GRAVES: [number, number][] = (() => {
+    const out: [number, number][] = [];
+    for (const x of [-15, -11, 11, 15]) for (const z of [-7, -1.5, 4, 9]) if (!((x === 15 && z < 0) || (x === -15 && z === 9))) out.push([x, z]);
+    return out;
+  })();
+
+  /** Where a body comes up at a grave: at its foot, toward the aisle, clear of the stone and the cross. */
+  private static graveSpot(gx: number, gz: number): THREE.Vector3 {
+    return new THREE.Vector3(gx + (gx < 0 ? 0.9 : -0.9), 0, gz);
   }
 
-  /** The charge warning: a dark-edged red lane with white arrows, readable on any floor. */
-  private static makeLaneTexture(): THREE.CanvasTexture {
-    const w = 64;
-    const h = 384;
+  private spawnContext(ranged: boolean): SpawnContext {
+    const yaw = this.firstPerson ? this.lookYaw : this.hero.facing;
+    return {
+      hero: this.hero.position,
+      forward: new THREE.Vector3(Math.sin(yaw), 0, Math.cos(yaw)),
+      camera: this.camera,
+      view: this.firstPerson ? 'first' : this.camStyle === 'top' ? 'top' : 'behind',
+      colliders: this.crypt.colliders,
+      nav: this.nav,
+      others: this.enemies.filter((o) => o.alive && o.state !== 'dormant').map((o) => o.position),
+      wallBetween: (a, b) => this.wallBetween(a, b),
+      recentlySeen: this.recentlySeen,
+      now: this.time,
+      lastSpawn: this.lastSpawn,
+      rng: this.spawnRng,
+      ranged,
+    };
+  }
+
+  /**
+   * How a monster comes into a hall. No glowing circles and nothing climbing out of the floor:
+   * - in the graveyard it rises upright out of a grave, with a tell first (disturbed earth,
+   *   a rattle, its eyes lighting up under the ground), then shakes awake and shuffles out;
+   * - elsewhere it starts out of sight, announced by a rattle, and walks in slowly;
+   * - the Skeleton King wakes where he stands.
+   * Nothing appears in view without a tell, nothing starts straight behind the player, and
+   * nothing swings for at least a second after it is up (see Enemy.rise).
+   */
+  private summon(e: Enemy): void {
+    if (!e.alive) return;
+    const hero = this.hero.position;
+    e.faceTarget.copy(hero);
+    e.spawnedAt = this.time;
+    const restless = this.restless.find((r) => r.enemy === e && !r.woken);
+    if (restless) {
+      // Called by the pillar fight before anyone walked up to it: it rises from its own grave if that
+      // is fair (not behind the player, not at their feet); otherwise it comes up elsewhere like any
+      // other sleeper and the earth on its grave settles.
+      restless.woken = true;
+      const g = restless.spot;
+      const view = this.firstPerson ? 'first' : this.camStyle === 'top' ? 'top' : 'behind';
+      const yaw = this.firstPerson ? this.lookYaw : this.hero.facing;
+      const straight = Math.hypot(g.x - hero.x, g.z - hero.z);
+      const walk = this.nav.walkDistance(g.x, g.z);
+      const facing = straight > 1e-3 ? ((g.x - hero.x) * Math.sin(yaw) + (g.z - hero.z) * Math.cos(yaw)) / straight : -1;
+      const limit = view === 'first' ? -0.2 : view === 'behind' ? -0.5 : -1;
+      // A grave the player has already seen stir, in front of them, is a warning given: it may rise
+      // there even close by. Any other grave must pass the normal distance rules.
+      const warned = restless.stirred && restless.seenFor >= 1.2 && facing >= limit && straight >= 2.5;
+      if (warned || (straight >= 6 && Number.isFinite(walk) && walk >= 6.5 && walk <= 30 && facing >= limit)) {
+        e.position.copy(g);
+        e.facing = Math.atan2(hero.x - g.x, hero.z - g.z);
+        this.riseFromGround(e, true);
+        this.lastSpawn = g.clone();
+        this.spawnLog.push({ tier: 0, d: walk, visible: true, mode: 'grave' });
+        return;
+      }
+      const mound = this.mounds.find((m) => m.stir && m.at.distanceToSquared(g) < 0.25);
+      if (mound) {
+        mound.life = mound.t + 1.2;
+        this.puffRing(g, 0.5, 4);
+      }
+    }
+    if (e.def.kind === 'king') {
+      e.rise('wake');
+      this.audio.play('rattle');
+      this.puff(e.position, 10);
+      this.spawnLog.push({ tier: 0, d: e.position.distanceTo(hero), visible: true, mode: 'wake' });
+      return;
+    }
+    const ctx = this.spawnContext(!!e.def.ranged);
+    if (this.level === 5) {
+      const occupied = this.enemies.filter((o) => o !== e && o.alive).map((o) => [o.position.x, o.position.z] as [number, number]);
+      const grave = chooseGrave(ctx, Game.GRAVES, e.position, occupied);
+      if (grave) {
+        const spot = Game.graveSpot(grave.x, grave.z);
+        e.position.copy(spot);
+        e.facing = Math.atan2(hero.x - spot.x, hero.z - spot.z) + (this.spawnRng.float() - 0.5) * 1.2;
+        this.riseFromGround(e, true);
+        this.lastSpawn = spot.clone();
+        this.spawnLog.push({ tier: 0, d: this.nav.walkDistance(spot.x, spot.z), visible: visibleFrom(ctx, spot), mode: 'grave' });
+        return;
+      }
+    }
+    const choice = chooseSpawnSpot(ctx, e.position);
+    if (choice.tier === 4 && !e.spawnRetries) {
+      // Nowhere fair right now (the player is looking everywhere it could come from): wait a moment.
+      e.spawnRetries = 1;
+      this.later(0.5, () => this.summon(e));
+      return;
+    }
+    e.position.copy(choice.at);
+    this.crypt.colliders.resolve(e.position, e.radius);
+    e.facing = Math.atan2(hero.x - e.position.x, hero.z - e.position.z);
+    this.lastSpawn = e.position.clone();
+    this.spawnLog.push({ tier: choice.tier, d: this.nav.walkDistance(e.position.x, e.position.z), visible: choice.visible, mode: choice.visible ? 'grave' : 'walk' });
+    if (choice.visible) {
+      // In view and far: the full telegraphed rise, so it never pops into existence.
+      this.riseFromGround(e, false);
+      return;
+    }
+    this.audio.play('rattle');
+    e.announced = false;
+    e.rise('walk');
+  }
+
+  /** The grave rise: disturbed earth and a rattle first, eyes lighting up, then the body. */
+  private riseFromGround(e: Enemy, grave: boolean): void {
+    e.rise('grave');
+    e.announced = true;
+    const at = e.position.clone();
+    const size = (grave ? 1.5 : 1.2) * e.def.scale;
+    // A grave that was already stirring keeps its broken earth; the body comes up through it.
+    const stirring = this.mounds.find((m) => m.stir && m.at.distanceToSquared(at) < 0.25);
+    if (stirring) {
+      stirring.stir = false;
+      stirring.base = (stirring.mesh.material as THREE.MeshBasicMaterial).opacity;
+      stirring.t = 0;
+      stirring.life = Enemy.TELL + Enemy.RISE + 2.2;
+      stirring.eyes.set(e.def.eyes);
+    } else {
+      this.makeMound(at, size, e.def.eyes, false);
+    }
+    this.audio.play('rattle');
+    this.puffRing(at, size * 0.45, 8);
+    this.later(0.5, () => e.alive && this.audio.play('rattle'));
+    // Earth breaks as the body comes up, and settles once it is standing.
+    for (const k of [0.15, 0.45]) this.later(Enemy.TELL + Enemy.RISE * k, () => e.alive && this.puffRing(at, size * 0.45, 6));
+    this.later(Enemy.TELL + Enemy.RISE, () => e.alive && this.audio.play('rise'));
+  }
+
+  /** Broken earth with clods around it. A stirring mound heaves slowly and stays until something rises from it. */
+  private makeMound(at: THREE.Vector3, size: number, eyes: number | string, stir: boolean): void {
+    // Dry, broken earth: lighter than the ground around it, so it reads on grass and on stone.
+    const mesh = new THREE.Mesh(this.portalGeometry, new THREE.MeshBasicMaterial({ map: this.moundTexture, transparent: true, opacity: 0, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1 }));
+    mesh.rotation.x = -Math.PI / 2;
+    mesh.rotation.z = this.spawnRng.float() * Math.PI * 2;
+    mesh.position.set(at.x, 0.03, at.z);
+    mesh.scale.setScalar(size);
+    mesh.renderOrder = 1;
+    this.scene.add(mesh);
+    // Clods of earth around the hole: they tip up as the ground breaks, then settle.
+    const clods: THREE.Mesh[] = [];
+    for (let i = 0; i < 7; i++) {
+      const clod = new THREE.Mesh(this.clodGeometry, this.clodMaterial);
+      const a = (i / 7) * Math.PI * 2 + this.spawnRng.float() * 0.6;
+      const r = size * 0.42 * (0.85 + this.spawnRng.float() * 0.3);
+      clod.position.set(at.x + Math.cos(a) * r, -0.12, at.z + Math.sin(a) * r);
+      clod.rotation.set(this.spawnRng.float() * 3, this.spawnRng.float() * 3, this.spawnRng.float() * 3);
+      clod.scale.setScalar(0.7 + this.spawnRng.float() * 0.7);
+      clod.userData.angle = a;
+      clod.castShadow = true;
+      this.scene.add(clod);
+      clods.push(clod);
+    }
+    if (stir) (mesh.material as THREE.MeshBasicMaterial).map = this.stirTexture;
+    this.mounds.push({ mesh, clods, eyes: new THREE.Color(eyes), at: at.clone(), t: 0, life: stir ? Infinity : Enemy.TELL + Enemy.RISE + 2.2, stir, base: 0 });
+  }
+
+  /** Dust kicked up around a ring (the rim of a hole), not from its middle. */
+  private puffRing(at: THREE.Vector3, radius: number, count: number, color: THREE.Color = this.dustColor, size = 0.3): void {
+    for (let i = 0; i < count; i++) {
+      const a = (i / count) * Math.PI * 2 + Math.random() * 0.5;
+      this.dust.spawn({ x: at.x + Math.cos(a) * radius, y: 0.15, z: at.z + Math.sin(a) * radius, vx: Math.cos(a) * 0.5, vy: 0.5 + Math.random() * 0.5, vz: Math.sin(a) * 0.5, life: 0.8 + Math.random() * 0.5, size, sizeEnd: size * 2.3, color, intensity: 1, drag: 1.2 });
+    }
+  }
+
+  /** Disturbed earth over a restless grave: darker and cooler than the grass, so it reads as a hole, not as light or treasure. */
+  private static makeStirTexture(): THREE.CanvasTexture {
+    const n = 128;
     const c = document.createElement('canvas');
-    c.width = w;
-    c.height = h;
+    c.width = c.height = n;
     const g = c.getContext('2d')!;
-    g.fillStyle = 'rgba(90, 0, 12, 0.6)';
-    g.fillRect(0, 0, w, h);
-    g.fillStyle = 'rgba(255, 60, 60, 0.95)';
-    g.fillRect(0, 0, 5, h);
-    g.fillRect(w - 5, 0, 5, h);
-    g.strokeStyle = 'rgba(255, 235, 235, 0.95)';
-    g.lineWidth = 7;
-    g.lineJoin = 'round';
-    // Arrows pointing along the lane (the far end of the texture is the charge direction).
-    for (let y = 30; y < h; y += 64) {
+    const soil = g.createRadialGradient(n / 2, n / 2, 0, n / 2, n / 2, n / 2);
+    soil.addColorStop(0, 'rgba(10, 10, 10, 0.95)');
+    soil.addColorStop(0.45, 'rgba(22, 21, 20, 0.9)');
+    soil.addColorStop(0.75, 'rgba(30, 29, 27, 0.6)');
+    soil.addColorStop(1, 'rgba(30, 29, 27, 0)');
+    g.fillStyle = soil;
+    g.fillRect(0, 0, n, n);
+    g.strokeStyle = 'rgba(70, 66, 60, 0.55)';
+    g.lineWidth = 2;
+    for (let i = 0; i < 7; i++) {
+      const a = (i / 7) * Math.PI * 2 + 0.3;
       g.beginPath();
-      g.moveTo(14, y + 18);
-      g.lineTo(w / 2, y);
-      g.lineTo(w - 14, y + 18);
+      g.moveTo(n / 2 + Math.cos(a) * 10, n / 2 + Math.sin(a) * 10);
+      g.lineTo(n / 2 + Math.cos(a + 0.2) * 30, n / 2 + Math.sin(a + 0.2) * 30);
+      g.lineTo(n / 2 + Math.cos(a - 0.1) * 50, n / 2 + Math.sin(a - 0.1) * 50);
       g.stroke();
     }
     const tex = new THREE.CanvasTexture(c);
     tex.colorSpace = THREE.SRGBColorSpace;
     return tex;
   }
+
+  /** Earth broken open where something rose: a dark patch that fades once it has stood up. */
+  private static makeMoundTexture(): THREE.CanvasTexture {
+    const n = 128;
+    const c = document.createElement('canvas');
+    c.width = c.height = n;
+    const g = c.getContext('2d')!;
+    // A pale rim of dry soil (reads on dark grass and dark stone) around a dark hole.
+    const soil = g.createRadialGradient(n / 2, n / 2, 0, n / 2, n / 2, n / 2);
+    soil.addColorStop(0, 'rgba(24, 16, 10, 0.92)');
+    soil.addColorStop(0.3, 'rgba(60, 42, 26, 0.85)');
+    soil.addColorStop(0.55, 'rgba(138, 106, 68, 0.85)');
+    soil.addColorStop(0.8, 'rgba(138, 106, 68, 0.45)');
+    soil.addColorStop(1, 'rgba(138, 106, 68, 0)');
+    g.fillStyle = soil;
+    g.fillRect(0, 0, n, n);
+    // Cracks radiating from the hole.
+    let seed = 11;
+    const rnd = (): number => ((seed = (seed * 16807) % 2147483647) / 2147483647);
+    g.strokeStyle = 'rgba(30, 20, 12, 0.8)';
+    g.lineCap = 'round';
+    for (let k = 0; k < 8; k++) {
+      let a = (k / 8) * Math.PI * 2 + rnd() * 0.5;
+      let x = n / 2 + Math.cos(a) * n * 0.2;
+      let y = n / 2 + Math.sin(a) * n * 0.2;
+      g.lineWidth = 3;
+      g.beginPath();
+      g.moveTo(x, y);
+      for (let st = 0; st < 4; st++) {
+        a += (rnd() - 0.5) * 0.8;
+        x += Math.cos(a) * (6 + rnd() * 8);
+        y += Math.sin(a) * (6 + rnd() * 8);
+        g.lineTo(x, y);
+      }
+      g.stroke();
+    }
+    const tex = new THREE.CanvasTexture(c);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    return tex;
+  }
+
 
   /** A soft glowing circle with a bright rim and a few rune ticks, drawn once. */
   private static makePortalTexture(): THREE.CanvasTexture {
@@ -1128,36 +1450,70 @@ export class Game {
     tex.colorSpace = THREE.SRGBColorSpace;
     return tex;
   }
-
-  private updatePortals(dt: number): void {
-    for (let i = this.portals.length - 1; i >= 0; i--) {
-      const p = this.portals[i];
-      p.t += dt;
-      const grow = Math.min(1, p.t / 0.35);
-      const fadeOut = p.t > Enemy.SUMMON_TIME ? Math.max(0, 1 - (p.t - Enemy.SUMMON_TIME) / 0.35) : 1;
-      const mat = p.mesh.material as THREE.MeshBasicMaterial;
-      mat.opacity = grow * fadeOut * (0.85 + Math.sin(p.t * 14) * 0.1);
-      p.mesh.scale.setScalar(p.size * 0.9 * (0.4 + 0.6 * (1 - Math.pow(1 - grow, 3))));
-      p.mesh.rotation.z += dt * 2.4;
-      if (p.t < Enemy.SUMMON_TIME && Math.random() < dt * 40) {
-        const a = Math.random() * Math.PI * 2;
-        const r = p.size * (0.5 + Math.random() * 0.45);
-        this.glow.spawn({
-          x: p.at.x + Math.cos(a) * r,
-          y: 0.1,
-          z: p.at.z + Math.sin(a) * r,
-          vy: 1.4 + Math.random() * 1.2,
-          life: 0.5 + Math.random() * 0.3,
-          size: 0.1,
-          sizeEnd: 0.02,
-          color: Math.random() < 0.3 ? this.portalHot : this.portalColor,
-          intensity: 3,
+  /** The charge warning: a dark-edged red lane with white arrows, readable on any floor. */
+  private static makeLaneTexture(): THREE.CanvasTexture {
+    const w = 64;
+    const h = 384;
+    const c = document.createElement('canvas');
+    c.width = w;
+    c.height = h;
+    const g = c.getContext('2d')!;
+    g.fillStyle = 'rgba(90, 0, 12, 0.6)';
+    g.fillRect(0, 0, w, h);
+    g.fillStyle = 'rgba(255, 60, 60, 0.95)';
+    g.fillRect(0, 0, 5, h);
+    g.fillRect(w - 5, 0, 5, h);
+    g.strokeStyle = 'rgba(255, 235, 235, 0.95)';
+    g.lineWidth = 7;
+    g.lineJoin = 'round';
+    // Arrows pointing along the lane (the far end of the texture is the charge direction).
+    for (let y = 30; y < h; y += 64) {
+      g.beginPath();
+      g.moveTo(14, y + 18);
+      g.lineTo(w / 2, y);
+      g.lineTo(w - 14, y + 18);
+      g.stroke();
+    }
+    const tex = new THREE.CanvasTexture(c);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    return tex;
+  }
+  private updateMounds(dt: number): void {
+    for (let i = this.mounds.length - 1; i >= 0; i--) {
+      const m = this.mounds[i];
+      m.t += dt;
+      const fade = m.t > m.life - 1 ? Math.max(0, m.life - m.t) : 1;
+      if (m.stir) {
+        // Disturbed, not yet open: the earth shows through the grass and the clods breathe
+        // (and settle again if the sleeper ends up rising somewhere else).
+        (m.mesh.material as THREE.MeshBasicMaterial).opacity = Math.min(0.75, m.t / 0.4) * fade;
+        m.clods.forEach((clod, k) => {
+          const breathe = (1 + Math.sin(m.t * 2.4 + k * 1.7)) * Math.min(1, m.t / 0.8) * fade;
+          clod.position.y = -0.12 + 0.2 * breathe;
+          clod.rotation.z = 0.35 * Math.sin(m.t * 2.4 + k * 1.7) * fade;
+          clod.rotation.x += dt * 0.35;
         });
+        if (fade > 0) continue;
+      } else {
+        const open = Math.max(m.base, Math.min(1, m.t / 0.4));
+        (m.mesh.material as THREE.MeshBasicMaterial).opacity = open * fade;
+        // Clods heave up during the tell, lie tipped while the body rises, and sink away with the patch.
+        const heave = m.t < Enemy.TELL ? Math.sin(Math.min(1, m.t / Enemy.TELL) * Math.PI * 0.5) : 1;
+        for (const clod of m.clods) {
+          clod.position.y = -0.12 + 0.2 * heave * fade;
+          clod.rotation.x += dt * (m.t < Enemy.TELL ? 2.5 : 0.2) * fade;
+        }
+        // Two points of light at the broken earth before the body shows: something is waking under it.
+        if (m.t < Enemy.TELL + 0.4) {
+          const a = m.mesh.rotation.z;
+          for (const side of [-1, 1]) this.glow.spawn({ x: m.at.x + Math.cos(a) * side * 0.14, y: 0.08, z: m.at.z + Math.sin(a) * side * 0.14, life: 0.1, size: 0.09, sizeEnd: 0.06, color: m.eyes, intensity: 3.5 });
+        }
       }
-      if (fadeOut <= 0) {
-        this.scene.remove(p.mesh);
-        (p.mesh.material as THREE.Material).dispose();
-        this.portals.splice(i, 1);
+      if (fade <= 0) {
+        this.scene.remove(m.mesh);
+        (m.mesh.material as THREE.Material).dispose();
+        for (const clod of m.clods) this.scene.remove(clod);
+        this.mounds.splice(i, 1);
       }
     }
   }
@@ -1208,20 +1564,20 @@ export class Game {
     this.burst(spot.clone().setY(1.2), this.gold, 40, 3.5);
     this.puff(spot, 12);
     this.audio.play('chest');
-    const beforeKing = LEVELS[this.route[this.stage + 1]]?.boss === true;
-    this.merchant = { who, props, box, items: this.rollShop(beforeKing ? 4 : 3) };
+    this.merchant = { who, props, box, items: this.rollShop(3) };
   }
 
   private rollShop(count: number): ShopItem[] {
     const all: ShopItem[] = [
       { name: 'Health Potion', text: 'One more potion for later.', price: 15, icon: 'potion', color: '#ff4f78', sold: false },
-      { name: 'Hearty Meal', text: 'Heal all your health right now.', price: 20, icon: 'heal', color: '#7dff9e', sold: false },
       { name: 'Iron Heart', text: '+20 max health for the rest of the quest.', price: 40, icon: 'heart', color: '#5ee0ff', sold: false },
       { name: 'Blessing', text: 'Choose one more blessing.', price: 55, icon: 'blessing', color: '#ffd23a', sold: false },
     ];
-    // The potion is always there (it's what kids need most); the rest are random.
-    const rest = all.slice(1).sort(() => Math.random() - 0.5);
-    return [all[0], ...rest].slice(0, count);
+    // No "heal now": every hall starts at full health, so it bought nothing. No Blessing once
+    // every blessing is at its top level: it would take 55 coins for nothing.
+    const anyBlessingLeft = Object.values(BLESSINGS).some((b) => (this.blessings[b.id] ?? 0) < b.max);
+    // A fixed order, so the number keys mean the same thing at every merchant.
+    return all.filter((it) => it.icon !== 'blessing' || anyBlessingLeft).slice(0, count);
   }
 
   private nearMerchant(): boolean {
@@ -1255,7 +1611,8 @@ export class Game {
     if (!m || !it || it.sold || it.price > this.coins) return;
     const hero = this.hero;
     if (it.icon === 'potion' && this.potions >= this.maxPotions) {
-      this.ui.hint('Your potion bag is full!', 2);
+      this.audio.play('block');
+      this.ui.showShop(m.items, this.coins, (k) => this.buy(k), () => this.closeShop(), true);
       return;
     }
     this.coins -= it.price;
@@ -1564,7 +1921,7 @@ export class Game {
     if (j.done) return;
     j.done = true;
     const kind = LEVELS[this.level].job?.kind;
-    const easy = this.difficulty.id === 'easy';
+    const easy = this.difficulty.gentleJobs;
     if (kind === 'books' || kind === 'wisps') {
       this.scene.remove(j.object);
       this.audio.play('pickup');
@@ -1631,8 +1988,8 @@ export class Game {
     this.defendSpawn -= dt;
     const pool = LEVELS[this.level].waves;
     if (this.defendSpawn <= 0 && this.defendLeft > 4 && pool.length) {
-      this.defendSpawn = this.difficulty.id === 'easy' ? 8 : 6;
-      if (living < (this.difficulty.id === 'easy' ? 4 : 6)) this.spawnWave(pool[this.defendWave++ % pool.length]);
+      this.defendSpawn = this.difficulty.defendEvery;
+      if (living < this.difficulty.defendCap) this.spawnWave(pool[this.defendWave++ % pool.length]);
     }
     if (this.defendLeft > 0) return;
     // Time! The pillar's light blasts every monster away.
@@ -1686,24 +2043,23 @@ export class Game {
   }
 
   private spawnWave(kinds: EnemyKind[], eliteFirst = false): void {
-    const points = [...this.crypt.spawnPoints]
-      .filter((p) => p.distanceTo(this.hero.position) > 4.5)
-      .sort(() => Math.random() - 0.5);
+    const far = this.crypt.spawnPoints.filter((p) => p.distanceTo(this.hero.position) > 4.5);
+    const points = this.spawnRng.shuffle(far.length ? far : this.crypt.spawnPoints);
     kinds.forEach((kind, i) => {
       if (this.useEntrances()) {
         this.later(i * 0.7, () => {
           const enemy = this.spawnEnemy(kind, this.crypt.entrances![0].hide);
-          if (eliteFirst && i === 0) enemy.makeElite(this.difficulty.id === 'easy' ? 1.5 : 2.2);
+          if (eliteFirst && i === 0) enemy.makeElite(this.difficulty.eliteHp);
           enemy.sleep();
           this.enterFrom(enemy, i + this.waveEntryOffset++);
         });
         return;
       }
-      const at = points[i % points.length].clone().add(new THREE.Vector3((Math.random() - 0.5) * 1.5, 0, (Math.random() - 0.5) * 1.5));
+      const at = points[i % points.length].clone().add(new THREE.Vector3((this.spawnRng.float() - 0.5) * 1.5, 0, (this.spawnRng.float() - 0.5) * 1.5));
       this.later(i * 0.4, () => {
         const enemy = this.spawnEnemy(kind, at);
         if (eliteFirst && i === 0) {
-          enemy.makeElite(this.difficulty.id === 'easy' ? 1.5 : 2.2);
+          enemy.makeElite(this.difficulty.eliteHp);
           this.floatAt(at, 3, 'Elite!', 'crit');
         }
         enemy.facing = Math.atan2(this.hero.position.x - at.x, this.hero.position.z - at.z);
@@ -1733,6 +2089,10 @@ export class Game {
     e.position.z += (Math.random() - 0.5) * 1.2;
     this.crypt.colliders.resolve(e.position, e.radius);
     e.facing = Math.atan2(entry.mouth.x - e.position.x, entry.mouth.z - e.position.z);
+    e.faceTarget.copy(this.hero.position);
+    e.announced = false;
+    e.spawnedAt = this.time;
+    e.spawnedWhere.copy(e.position);
     this.audio.play('rattle');
     this.puff(entry.mouth, 10);
     this.tip('entrance', 'Listen: bones are stirring. Skeletons come in from the <b>side niches</b> and the <b>way you came</b>!', 5);
@@ -1762,10 +2122,12 @@ export class Game {
       last ? 'All four pillars! The way to the Skeleton King is open' : `${left} more to go! Follow the gold marker to the door`,
     );
     this.later(2.5, () => this.crypt.altar.settle());
-    // A reward for clearing the hall, so you're never left without a potion.
+    // A reward for clearing the hall: a potion when the bag can use one, coins otherwise.
     this.later(1.2, () => {
       const at = this.crypt.altar.position.clone().add(new THREE.Vector3(1.8, 0, 3));
-      this.dropPotion(at);
+      const nextIsBoss = LEVELS[this.route[this.stage + 1]]?.boss === true;
+      if (this.loot.clearReward(this.potions, nextIsBoss) === 'potion') this.dropPotion(at);
+      else this.dropCoins(at, 10);
       this.burst(at.clone().setY(1), this.heal, 30, 3);
     });
     this.ui.objective(last ? 'Face the Skeleton King! Follow the gold marker to the door' : 'Follow the gold marker to the golden door');
@@ -1877,6 +2239,7 @@ export class Game {
   }
 
   private lose(): void {
+    this.telemetry.deaths++;
     if (this.coins > 0) {
       this.lost = { coins: (this.lost?.coins ?? 0) + this.coins, level: this.level, spot: this.hero.position.clone().setY(0), object: null };
       this.coins = 0;
@@ -1896,13 +2259,23 @@ export class Game {
     this.frameCount++;
     if (this.paused || this.choosing) dt = 0;
     if (this.hitStop > 0) {
+      // Time freezes on impact and eases back in, instead of snapping from a tenth speed to full.
       this.hitStop -= dt;
-      dt *= 0.1;
+      const k = THREE.MathUtils.clamp(this.hitStop / 0.06, 0, 1);
+      dt *= 0.1 + 0.9 * Math.pow(1 - k, 3);
     }
     this.time += dt;
     this.input.pollGamepad(this.phase !== 'play' || this.paused || this.choosing, Math.min(0.05, (now - (this.lastPad || now)) / 1000));
     this.lastPad = now;
     this.update(dt);
+    // Camera kick spring (after every camera update, before the frame is drawn).
+    if (this.kick.lengthSq() + this.kickVel.lengthSq() > 1e-7) {
+      this.kickVel.addScaledVector(this.kick, -110 * dt).multiplyScalar(Math.exp(-14 * dt));
+      this.kick.addScaledVector(this.kickVel, dt);
+      // Never further than the hero's own body: the view can't be pushed into a wall.
+      if (this.kick.length() > 0.14) this.kick.setLength(0.14);
+      this.camera.position.add(this.kick);
+    }
     this.renderer.render(dt);
     this.input.endFrame();
     requestAnimationFrame(this.frame);
@@ -1930,7 +2303,7 @@ export class Game {
     this.crypt.runes.update(t);
     this.crypt.altar.update(t, dt);
     this.crypt.door.update(t, dt);
-    this.updatePickups(t);
+    this.updatePickups(t, dt);
     this.spawnDust(dt);
     this.glow.update(dt);
     this.dust.update(dt);
@@ -2176,10 +2549,12 @@ export class Game {
         this.camera.fov = this.fovFor(36);
         this.camera.updateProjectionMatrix();
       }
-      // On a narrow phone only two heroes fit: follow the one being looked at.
-      const pick = !title && this.camera.aspect < 1 ? this.lineup[this.chosen] : undefined;
-      this.camX = THREE.MathUtils.damp(this.camX, pick ? pick.position.x * 0.85 : 0, 6, dt);
-      this.rig.update(dt, t, this.camTarget.set(this.camX, title ? 1.25 : pick ? 0.15 : this.camera.aspect < 1.6 ? 0.55 : window.innerHeight <= 480 ? 0.35 : 0.95, LINEUP_Z + 0.3));
+      // The camera glides toward the hero being looked at: all the way on a narrow phone, where
+      // only two heroes fit, and a gentle lean on wide screens, where the whole line stays in view.
+      const narrow = this.camera.aspect < 1;
+      const pick = !title ? this.lineup[this.chosen] : undefined;
+      this.camX = THREE.MathUtils.damp(this.camX, pick ? pick.position.x * (narrow ? 0.85 : 0.3) : 0, 6, dt);
+      this.rig.update(dt, t, this.camTarget.set(this.camX, title ? 1.25 : narrow ? 0.15 : this.camera.aspect < 1.6 ? 0.55 : window.innerHeight <= 480 ? 0.35 : 0.95, LINEUP_Z + 0.3));
       return;
     } else if (this.phase === 'victory') {
       // Hero stands to the right of the panel on wide screens.
@@ -2276,7 +2651,7 @@ export class Game {
       this.setPaused(true);
       return;
     }
-    if (this.input.keyPressed('KeyM')) this.audio.setMuted(!this.audio.muted);
+    if (this.input.keyPressed('KeyM')) this.setMuted(!this.audio.muted);
 
     const hero = this.hero;
     this.readInput();
@@ -2284,6 +2659,22 @@ export class Game {
     hero.update(dt, this.heroInput, this.events);
     const before = hero.position.clone();
     this.crypt.colliders.resolve(hero.position, hero.radius);
+    // A body rising out of the earth can't be walked through: ease the hero off it.
+    for (const e of this.enemies) {
+      if (e.state !== 'rising' && e.collisionEase <= 0) continue;
+      const dx = hero.position.x - e.position.x;
+      const dz = hero.position.z - e.position.z;
+      const min = e.radius + hero.radius;
+      const d2 = dx * dx + dz * dz;
+      if (d2 >= min * min) continue;
+      const d = Math.sqrt(d2);
+      const ux = d > 1e-4 ? dx / d : Math.sin(this.lookYaw + Math.PI);
+      const uz = d > 1e-4 ? dz / d : Math.cos(this.lookYaw + Math.PI);
+      const k = 1;
+      hero.position.x += ux * (min - d) * k;
+      hero.position.z += uz * (min - d) * k;
+      this.crypt.colliders.resolve(hero.position, hero.radius);
+    }
     if (before.distanceToSquared(hero.position) > 1e-6) hero.clampDash();
 
     if (this.renew.left > 0) {
@@ -2313,7 +2704,8 @@ export class Game {
       }
     }
     this.updateAmbushes();
-    this.updatePortals(dt);
+    this.updateRestlessGraves(dt);
+    this.updateMounds(dt);
     this.updateLostTreasure();
     this.updateBrazier(dt);
     this.updateBoss();
@@ -2371,7 +2763,7 @@ export class Game {
     this.updateArrow(dt);
     this.autoPotion(dt);
     if (this.pickups.some((k) => k.base.distanceTo(this.tmp.copy(hero.position).setY(0)) < 6)) {
-      this.tip('potion-seen', 'The glowing heart is a <b>health potion</b>. Walk over it to grab it!');
+      this.tip('potion-seen', 'A <b>health potion</b>! Walk over it to put it in your bag.');
     } else if (this.crates.some((c) => c.position.distanceTo(hero.position) < 3)) {
       this.tip('crates', 'Smash barrels and crates with <kbd>F</kbd>. There might be a potion inside!');
     }
@@ -2558,6 +2950,17 @@ export class Game {
     }
     for (const e of this.enemies) {
       e.update(dt, ctx);
+      if (e.spawnedAt >= 0) {
+        if (e.firstSeenAt < 0 && this.inFrame(e) && !this.wallBetween(this.hero.position, e.position)) e.firstSeenAt = this.time;
+        if (e.state === 'windup' || e.state === 'charge') {
+          this.telemetry.firstSwing.push(this.time - e.spawnedAt);
+          if (e.firstSeenAt >= 0) this.telemetry.sightToSwing.push(this.time - e.firstSeenAt);
+          e.spawnedAt = -1;
+        } else if (e.state === 'chase' && e.wake >= 1 && !e.stuckChecked && this.time - e.spawnedAt > 8) {
+          e.stuckChecked = true;
+          if (e.position.distanceTo(e.spawnedWhere) < 1 && e.position.distanceTo(this.hero.position) > e.def.reach + 0.5) this.telemetry.stuck++;
+        }
+      }
       if (!e.alive) continue;
       if (e.burn > 0) {
         e.burn -= dt;
@@ -2573,8 +2976,17 @@ export class Game {
           }
         }
       }
+      if (e.state === 'rising') continue;
       const bx = e.position.x;
       const bz = e.position.z;
+      if (e.collisionEase > 0) {
+        // Just risen inside a grave's footprint: ease out of it over a second instead of snapping.
+        e.collisionEase -= dt;
+        const target = e.position.clone();
+        this.crypt.colliders.resolve(target, e.radius);
+        e.position.lerp(target, Math.min(1, dt * 4));
+        continue;
+      }
       this.crypt.colliders.resolve(e.position, e.radius);
       // Pushed back by a wall or the altar: slide sideways around it, toward the hero.
       const cx = e.position.x - bx;
@@ -2662,7 +3074,7 @@ export class Game {
       this.damageHero(king.def.damage * this.difficulty.enemyDamage, king.position);
     }
     if (king.animSpeed > 1) {
-      const n = this.difficulty.id === 'easy' ? 6 : 10;
+      const n = this.difficulty.kingBones;
       const spin = Math.random() * Math.PI;
       for (let i = 0; i < n; i++) {
         const a = spin + (i / n) * Math.PI * 2;
@@ -2693,6 +3105,8 @@ export class Game {
   }
 
   private damageHero(amount: number, from: THREE.Vector3): void {
+    this.telemetry.hitsTaken++;
+    this.telemetry.damageTaken += amount;
     const hero = this.hero;
     if (hero.dodgeInvul > 0) {
       this.floatAt(hero.position, 2.4, 'Dodged!', 'info');
@@ -2710,6 +3124,11 @@ export class Game {
     if (this.firstPerson && this.fp.markers) this.ui.hitFrom(this.relativeAngle(from));
     this.audio.play('hurt');
     this.shake(0.22);
+    hero.jolt(from, 1);
+    // The view itself is shoved away from the blow and springs back: a push with a direction,
+    // on top of the trauma shake's texture.
+    this.tmp.copy(hero.position).sub(from).setY(0).normalize();
+    this.kickVel.addScaledVector(this.tmp, (REDUCED_MOTION ? 0.6 : 2.2) * (this.firstPerson ? 0.55 : 1));
     this.burst(hero.position.clone().setY(1.1), this.red, 14, 2.5);
     // A short grace period so a crowd can't chain hits.
     hero.invulnerable = Math.max(hero.invulnerable, 0.45);
@@ -2778,18 +3197,26 @@ export class Game {
 
   private onEnemyDied(e: Enemy): void {
     this.kills++;
-    const worth = { runt: 2, skeleton: 3, mage: 4, brute: 6, charger: 4, king: 60 }[e.def.kind] + (e.elite ? 10 : 0);
-    this.dropCoins(e.position, worth);
+    const at = e.position.clone().setY(0);
+    // Gold once per hall: on a retry the pile already holds it, so a kill shows bones and dust only.
+    const worth = this.hallAttempt ? 0 : { runt: 2, skeleton: 3, mage: 4, brute: 6, charger: 4, king: 60 }[e.def.kind];
     this.audio.play('bones');
     this.puff(e.position, 18);
-    this.burst(e.position.clone().setY(1), this.gold, 18, 3);
+    if (worth > 0) this.burst(e.position.clone().setY(1), this.gold, 18, 3);
     if (e.elite) {
+      // An elite always pays: a potion if the bag can use one, otherwise a heart and extra coins.
       this.burst(e.position.clone().setY(1.2), this.gold, 50, 5);
       this.shake(0.3);
-      this.later(0.5, () => this.dropPotion(e.position.clone().setY(0)));
-    } else if (Math.random() < this.difficulty.potionDrop + 0.15 * this.lvl('lucky')) {
-      this.later(0.5, () => this.dropPotion(e.position.clone().setY(0)));
+      const reward = this.loot.eliteReward(this.potions);
+      this.dropCoins(at, worth + (reward === 'heart' && !this.hallAttempt ? 6 : 0));
+      this.later(0.5, () => (reward === 'potion' ? this.dropPotion(at) : this.dropHeart(at)));
+      return;
     }
+    this.dropCoins(at, worth);
+    // A small heart, likelier the more you are hurt and the longer since the last one (Doom
+    // and Diablo drop health where the fight is); a big monster counts as two chances.
+    const big = e.def.kind === 'brute' || e.def.kind === 'charger' || e.def.kind === 'king';
+    if (this.loot.onKill(this.hero.hp / this.hero.maxHp, big) === 'heart') this.later(0.4, () => this.dropHeart(at));
   }
 
   /**
@@ -2830,17 +3257,28 @@ export class Game {
    * rest circle and wait. Fights stay readable and fair even with a crowd.
    */
   private mayAttack(e: Enemy): boolean {
-    const limit = this.difficulty.id === 'easy' ? 1 : this.difficulty.id === 'normal' ? 2 : 3;
+    const limit = this.difficulty.attackTickets;
     let busy = 0;
     for (const o of this.enemies) if (o !== e && o.alive && (o.state === 'windup' || o.state === 'recover' || o.state === 'charge')) busy++;
     if (busy >= limit) return false;
-    // First person: a monster the player can't see waits a moment before it swings,
-    // so the warning chevron and its rattle have time to register (God of War's rule:
-    // visibility decides who may attack).
-    if (this.firstPerson && !this.inFrame(e)) {
+    // A monster the player can't see waits a moment before it swings, so the warning
+    // chevron and its rattle have time to register (God of War's rule: visibility decides
+    // who may attack). Applies in every view: off-screen hits feel unfair in all of them.
+    // Its first blow ever comes later still: the player must have had it in view for 1.2 s,
+    // or its off-screen warning must have shown for 1.5 s (walk-ins from the side used to
+    // land a hit within a second of first being seen).
+    const first = e.spawnedAt >= 0;
+    if (!this.inFrame(e)) {
       if (e.offscreenSince < 0) e.offscreenSince = this.time;
-      if (this.time - e.offscreenSince < 0.6) return false;
-    } else e.offscreenSince = -1;
+      if (this.time - e.offscreenSince < (first ? 1.5 : 0.6)) return false;
+    } else {
+      e.offscreenSince = -1;
+      if (first && (e.firstSeenAt < 0 || this.time - e.firstSeenAt < 1.2)) return false;
+    }
+    // Blows never start at the same instant: a short gap between any two attackers.
+    if (this.time - this.lastAttackStart < (this.difficulty.id === 'easy' ? 1.2 : 0.7)) return false;
+    this.lastAttackStart = this.time;
+    if (first && !this.inFrame(e)) this.telemetry.blindFirstSwings++;
     return true;
   }
 
@@ -2953,7 +3391,7 @@ export class Game {
     const lost = this.lost;
     if (!lost || lost.level !== this.level) return;
     const p = lost.spot.clone();
-    for (let i = 0; i < 20 && this.crypt.colliders.hits(p.x, p.z, 0.7); i++) p.multiplyScalar(0.92);
+    for (let i = 0; i < 20 && this.crypt.colliders.hits(p.x, p.z, 0.7); i++) p.lerp(this.hero.position, 0.12).setY(0);
     lost.spot.copy(p);
     const object = new THREE.Group();
     // A little pile of gold: reads as "your coins" at a glance.
@@ -2972,7 +3410,7 @@ export class Game {
     object.position.copy(p);
     this.scene.add(object);
     lost.object = object;
-    this.later(1.2, () => this.ui.hint(`Your <b>${lost.coins} coins</b> fell where you did. Go and get them back!`, 6));
+    this.later(4.5, () => lost.object && this.lost === lost && this.ui.hint(`Your <b>${lost.coins} coins</b> are where you fell. Follow the arrow.`, 5));
   }
 
   private updateLostTreasure(): void {
@@ -3007,7 +3445,7 @@ export class Game {
     const p = spot.position;
     const box = { minX: p.x - 0.8, maxX: p.x + 0.8, minZ: p.z - 0.55, maxZ: p.z + 0.55 };
     this.crypt.colliders.boxes.push(box);
-    this.chest = { object, box, position: p.clone(), opened: false };
+    this.chest = { object, box, position: p.clone(), opened: this.chestOpened };
     this.nav = new NavGrid(this.crypt.colliders);
   }
 
@@ -3025,14 +3463,22 @@ export class Game {
       return;
     }
     chest.opened = true;
+    this.chestOpened = true;
     this.audio.play('chest');
     this.shake(0.2);
     this.burst(chest.position.clone().setY(1.2), this.gold, 70, 5);
     chest.object.scale.set(1.15, 0.85, 1.15);
     this.later(0.15, () => chest.object.scale.setScalar(1));
     const out = chest.position.z > 0 ? -1 : 1;
-    this.dropCoins(chest.position.clone().add(new THREE.Vector3(0, 0, out)), 12 + this.stage * 4);
-    if (Math.random() < 0.6) this.later(0.4, () => this.dropPotion(chest.position.clone().add(new THREE.Vector3(1.4, 0, out * 1.2))));
+    const beside = chest.position.clone().add(new THREE.Vector3(1.4, 0, out * 1.3));
+    if (this.stage === 2 && !this.crystalFound) {
+      this.dropCoins(chest.position.clone().add(new THREE.Vector3(0, 0, out)), 12 + this.stage * 4);
+      this.later(0.5, () => this.dropCrystal(beside));
+    } else {
+      const reward = this.loot.chestReward(this.potions);
+      this.dropCoins(chest.position.clone().add(new THREE.Vector3(0, 0, out)), 12 + this.stage * 4 + (reward === 'coins' ? 8 : 0));
+      if (reward === 'potion') this.later(0.4, () => this.dropPotion(beside));
+    }
     this.floatAt(chest.position, 2, 'Treasure!', 'crit');
   }
 
@@ -3099,6 +3545,80 @@ export class Game {
   /** A monster asleep in an ambush room the hero hasn't entered yet. */
   private waitingInAmbush(e: Enemy): boolean {
     return this.ambushes.some((a) => !a.sprung && a.monsters.includes(e));
+  }
+
+  /**
+   * Coming near a restless grave disturbs it: within 8 m the earth stirs (a few motes and a faint
+   * rattle, enough for a careful player to back away), within 5 m the sleeper rises. One at a time,
+   * never more than two risen from graves at once outside the pillar fight, so a run down the
+   * middle aisle can't wake a crowd. The rise itself gives 6 s before the first swing.
+   */
+  /** Is a point on the ground inside the picture (with a margin), and not behind a wall? */
+  private onScreen(p: THREE.Vector3, margin = 0.08): boolean {
+    const v = this.projected.copy(p).setY(0.3).project(this.camera);
+    if (v.z > 1 || Math.abs(v.x) > 1 - margin || Math.abs(v.y) > 1 - margin) return false;
+    return !this.wallBetween(this.hero.position, p);
+  }
+
+  private updateRestlessGraves(dt: number): void {
+    const hero = this.hero.position;
+    // The hero's ground speed, for the runner rule below.
+    if (dt > 0) this.heroVel.copy(hero).sub(this.lastHeroPos).divideScalar(dt).setY(0);
+    this.lastHeroPos.copy(hero);
+    if (!this.restless.length || this.choosing || !this.hero.alive) return;
+    for (const r of this.restless) {
+      if (r.woken || !r.enemy.alive || r.enemy.state !== 'dormant') continue;
+      const dx = r.spot.x - hero.x;
+      const dz = r.spot.z - hero.z;
+      const d = Math.hypot(dx, dz);
+      // Closing speed: a runner gets the warning from further away, so it lasts as long.
+      const closing = d > 1e-3 ? Math.max(0, (this.heroVel.x * dx + this.heroVel.z * dz) / d) : 0;
+      const stirAt = THREE.MathUtils.clamp(2.5 + closing * 1.35, 9, 11.5);
+      const walled = d <= 12.5 && this.wallBetween(hero, r.spot);
+      if (d > 12.5 || walled || (r.stirred && d > stirAt + 1.5)) {
+        // Left behind: the earth settles again (it can stir again if the player comes back).
+        if (r.stirred) {
+          r.stirred = false;
+          r.seenFor = 0;
+          const mound = this.mounds.find((m) => m.stir && m.at.distanceToSquared(r.spot) < 0.25);
+          if (mound) mound.life = mound.t + 1.2;
+          this.puffRing(r.spot, 0.5, 4, this.earthColor, 0.18);
+        }
+        continue;
+      }
+      if (d <= stirAt && !r.stirred) {
+        r.stirred = true;
+        r.stirredAt = this.time;
+        r.lastRattle = this.time;
+        r.seenFor = 0;
+        this.audio.play('rattle');
+        this.makeMound(r.spot, 1.5 * r.enemy.def.scale, r.enemy.def.eyes, true);
+      }
+      if (!r.stirred) continue;
+      if (this.time - r.lastStir > 1.1) {
+        r.lastStir = this.time;
+        this.puffRing(r.spot, 0.5, 3, this.earthColor, 0.18);
+      }
+      if (this.time - r.lastRattle > 2.4) {
+        r.lastRattle = this.time;
+        this.audio.play('rattle');
+      }
+      // The warning counts only while the player can actually see the stirring earth.
+      const seen = this.onScreen(r.spot);
+      if (seen) r.seenFor += dt;
+      // Wake: seen stirring for 1.2 s, still on screen, near, and not right under the hero.
+      if (!seen || r.seenFor < 1.2 || d > 6.5 || d < 2.5) continue;
+      const risenFromGraves = this.restless.filter((o) => o.woken && o.enemy.alive && o.enemy.state === 'rising').length;
+      if (this.time - this.lastRestlessWake < 2.5 || (this.step !== 'fight' && risenFromGraves >= 2)) continue;
+      r.woken = true;
+      this.lastRestlessWake = this.time;
+      r.enemy.faceTarget.copy(hero);
+      r.enemy.spawnedAt = this.time;
+      r.enemy.position.copy(r.spot);
+      r.enemy.facing = Math.atan2(hero.x - r.spot.x, hero.z - r.spot.z);
+      this.riseFromGround(r.enemy, true);
+      this.spawnLog.push({ tier: 0, d, visible: true, mode: 'grave-disturbed' });
+    }
   }
 
   /** Walking into an ambush room wakes its monsters. */
@@ -3238,7 +3758,7 @@ export class Game {
   private autoPotion(dt: number): void {
     this.autoPotionCooldown -= dt;
     const hero = this.hero;
-    if (this.difficulty.id !== 'easy' || !hero.alive || this.potions <= 0 || this.autoPotionCooldown > 0) return;
+    if (!this.difficulty.autoPotion || !hero.alive || this.potions <= 0 || this.autoPotionCooldown > 0) return;
     if (hero.hp > hero.maxHp * 0.3) return;
     this.autoPotionCooldown = 4;
     this.floatAt(hero.position, 2.8, 'Auto potion!', 'heal');
@@ -3271,7 +3791,8 @@ export class Game {
     const hero = this.hero;
     let goal: THREE.Vector3 | null = null;
     let color = '#ffc35a';
-    if (this.brazier && !this.brazier.lit) goal = this.brazier.position;
+    if (this.lost?.object && this.lost.level === this.level && this.step !== 'fight') goal = this.lost.spot;
+    else if (this.brazier && !this.brazier.lit) goal = this.brazier.position;
     else if (this.step === 'explore' && this.jobLeft() > 0) goal = this.nearestJobItem()?.at ?? null;
     else if (this.step === 'explore') goal = this.crypt.altar.position;
     else if (this.step === 'cleared' && this.crypt.door.isOpen) goal = this.crypt.doorAt.clone().add(new THREE.Vector3(0, 0, 1));
@@ -3540,6 +4061,7 @@ export class Game {
     }
     this.potions--;
     this.potionsUsed++;
+    this.telemetry.drinks++;
     this.ui.pulseSlot('potion');
     this.audio.play('potion');
     this.healHero(hero.maxHp * 0.45, true);
@@ -3651,47 +4173,99 @@ export class Game {
   }
 
   private dropPotion(at: THREE.Vector3): void {
+    this.telemetry.potionsFound++;
     // Nudge toward the middle until the spot is clear of props.
     const p = at.clone();
-    for (let i = 0; i < 20 && this.crypt.colliders.hits(p.x, p.z, 0.6); i++) p.multiplyScalar(0.9);
+    for (let i = 0; i < 20 && this.crypt.colliders.hits(p.x, p.z, 0.6); i++) p.lerp(this.hero.position, 0.12).setY(0);
     const object = this.makePotion();
     object.position.copy(p);
     this.scene.add(object);
-    this.pickups.push({ object, base: p.clone() });
+    this.pickups.push({ object, base: p.clone(), kind: 'potion', age: 0 });
+    // A short sparkle as it pops out, then no glow: it's found, not advertised.
+    this.burst(p.clone().setY(0.7), this.red, 16, 2.2);
   }
+  /** A small red heart from a defeated skeleton: heals a little on the spot. */
+  private dropHeart(at: THREE.Vector3): void {
+    this.telemetry.hearts++;
+    const p = at.clone();
+    for (let i = 0; i < 20 && this.crypt.colliders.hits(p.x, p.z, 0.4); i++) p.lerp(this.hero.position, 0.12).setY(0);
+    const shape = new THREE.Shape();
+    shape.moveTo(0, -0.22);
+    shape.bezierCurveTo(-0.3, 0, -0.26, 0.2, -0.13, 0.22);
+    shape.bezierCurveTo(-0.05, 0.23, 0, 0.17, 0, 0.13);
+    shape.bezierCurveTo(0, 0.17, 0.05, 0.23, 0.13, 0.22);
+    shape.bezierCurveTo(0.26, 0.2, 0.3, 0, 0, -0.22);
+    const geo = new THREE.ExtrudeGeometry(shape, { depth: 0.1, bevelEnabled: true, bevelSize: 0.02, bevelThickness: 0.02, bevelSegments: 1, curveSegments: 6 });
+    geo.center();
+    const mat = new THREE.MeshStandardMaterial({ color: '#e0283f', emissive: '#ff2a3a', emissiveIntensity: 1.4, roughness: 0.4, flatShading: true });
+    const mesh = new THREE.Mesh(geo, mat);
+    mesh.position.y = 0.45;
+    mesh.castShadow = true;
+    const object = new THREE.Group();
+    object.add(mesh);
+    object.position.copy(p);
+    this.scene.add(object);
+    this.pickups.push({ object, base: p.clone(), kind: 'heart', age: 0 });
+  }
+
+  /** The run's one heart crystal: more max health, the only pickup with a beam of light. */
+  private dropCrystal(at: THREE.Vector3): void {
+    this.crystalFound = true;
+    const object = new THREE.Group();
+    const mat = new THREE.MeshStandardMaterial({ color: '#ff6b8a', emissive: '#ff3d6e', emissiveIntensity: 1.8, roughness: 0.2, flatShading: true });
+    const gem = new THREE.Mesh(new THREE.OctahedronGeometry(0.32, 0), mat);
+    gem.scale.set(0.8, 1.3, 0.8);
+    gem.position.y = 0.9;
+    gem.castShadow = true;
+    const beam = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.35, 0.5, 6, 12, 1, true),
+      new THREE.MeshBasicMaterial({ color: '#ff9ab0', transparent: true, opacity: 0.22, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide }),
+    );
+    beam.position.y = 3;
+    beam.name = 'beam';
+    object.add(gem, beam);
+    object.position.copy(at);
+    this.scene.add(object);
+    this.pickups.push({ object, base: at.clone(), kind: 'crystal', age: 0 });
+    this.burst(at.clone().setY(1), new THREE.Color('#ff7ba0'), 40, 4);
+    this.audio.play('pillar');
+  }
+
 
   /** A round flask of glowing red potion with a white heart floating over it: reads as "health". */
   private readonly potionParts = {
-    liquid: new THREE.SphereGeometry(0.27, 24, 16),
-    neck: new THREE.CylinderGeometry(0.08, 0.1, 0.2, 16),
-    cork: new THREE.CylinderGeometry(0.095, 0.085, 0.09, 12),
-    liquidMat: new THREE.MeshStandardMaterial({ color: '#ff2a4f', emissive: '#ff1040', emissiveIntensity: 0.7, roughness: 0.15, metalness: 0.1 }),
-    neckMat: new THREE.MeshStandardMaterial({ color: '#ffe3ea', roughness: 0.1, transparent: true, opacity: 0.85 }),
-    corkMat: new THREE.MeshStandardMaterial({ color: '#8a5a32', roughness: 0.8 }),
+    // A flask in the pack's own low-poly language: an eight-sided belly, a tall neck, a fat cork,
+    // crimson-magenta glass so it never reads as the heart's scarlet.
+    liquid: new THREE.SphereGeometry(0.26, 8, 6),
+    neck: new THREE.CylinderGeometry(0.07, 0.1, 0.28, 8),
+    cork: new THREE.CylinderGeometry(0.11, 0.09, 0.12, 6),
+    liquidMat: new THREE.MeshStandardMaterial({ color: '#d81b60', emissive: '#a0103f', emissiveIntensity: 0.55, roughness: 0.35, flatShading: true }),
+    neckMat: new THREE.MeshStandardMaterial({ color: '#f6d6e4', roughness: 0.3, transparent: true, opacity: 0.9, flatShading: true }),
+    corkMat: new THREE.MeshStandardMaterial({ color: '#8a5a32', roughness: 0.9, flatShading: true }),
   };
 
+
+
   private makePotion(): THREE.Group {
+    // The flask's parts are shared by every potion: never disposed with one pickup.
+    for (const part of Object.values(this.potionParts)) part.userData.shared = true;
     const group = new THREE.Group();
     const pp = this.potionParts;
     const liquid = new THREE.Mesh(pp.liquid, pp.liquidMat);
     liquid.position.y = 0.27;
     const neck = new THREE.Mesh(pp.neck, pp.neckMat);
-    neck.position.y = 0.6;
+    neck.position.y = 0.62;
     const cork = new THREE.Mesh(pp.cork, pp.corkMat);
-    cork.position.y = 0.73;
+    cork.position.y = 0.8;
     for (const m of [liquid, neck, cork]) m.castShadow = true;
-    if (!this.heartTexture) this.heartTexture = makeHeartTexture();
-    const heart = new THREE.Sprite(new THREE.SpriteMaterial({ map: this.heartTexture, transparent: true, depthWrite: false }));
-    heart.position.y = 1.25;
-    heart.scale.setScalar(0.55);
-    heart.name = 'heart';
-    group.add(liquid, neck, cork, heart);
+    group.add(liquid, neck, cork);
     return group;
   }
 
   /** Barrels and crates to smash. Each blocks the way until it's broken. */
   private placeCrates(): void {
     this.crypt.crateSpots.forEach((spot, i) => {
+      if (this.smashedCrates.has(i)) return;
       const object = this.assets.piece(i % 2 ? 'box_small' : 'barrel_small');
       object.traverse((o) => {
         o.castShadow = true;
@@ -3705,7 +4279,7 @@ export class Game {
       const half = 0.45;
       const box = { minX: spot.x - half, maxX: spot.x + half, minZ: spot.z - half, maxZ: spot.z + half };
       this.crypt.colliders.boxes.push(box);
-      this.crates.push({ object: holder, box, position: spot.clone() });
+      this.crates.push({ object: holder, index: i, box, position: spot.clone() });
     });
     this.nav = new NavGrid(this.crypt.colliders);
   }
@@ -3725,6 +4299,7 @@ export class Game {
       if (dist > reach) return true;
       if (facing && dist > 0.8 && d.normalize().dot(facing) < Math.cos(arc / 2)) return true;
       broke = true;
+      this.smashedCrates.add(c.index);
       this.removeCrate(c);
       this.puff(c.position, 14);
       for (let i = 0; i < 18; i++) {
@@ -3734,9 +4309,8 @@ export class Game {
       this.audio.play('block');
       this.audio.play('hit');
       this.shake(0.12);
-      const chance = (this.difficulty.id === 'easy' ? 0.5 : 0.35) + 0.15 * this.lvl('lucky');
-      if (Math.random() < chance) this.later(0.15, () => this.dropPotion(c.position.clone()));
-      else this.dropCoins(c.position, 3 + Math.floor(Math.random() * 3));
+      if (this.loot.crateReward(c.index, this.potions, this.lvl('lucky')) === 'potion') this.later(0.15, () => this.dropPotion(c.position.clone()));
+      else this.dropCoins(c.position, this.loot.crateCoins());
       return false;
     });
     if (broke) {
@@ -3746,23 +4320,84 @@ export class Game {
     return broke;
   }
 
-  private updatePickups(t: number): void {
+  private updatePickups(t: number, dt: number): void {
     for (const pk of this.pickups) {
-      pk.object.position.y = 0.12 + Math.sin(t * 2.4 + pk.base.x) * 0.1;
-      pk.object.rotation.y = t * 1.4;
-      const heart = pk.object.getObjectByName('heart');
-      if (heart) heart.scale.setScalar(0.55 + Math.sin(t * 5 + pk.base.z) * 0.06);
-      if (Math.random() < 0.15) {
-        this.glow.spawn({ x: pk.base.x + (Math.random() - 0.5) * 0.6, y: 0.4, z: pk.base.z + (Math.random() - 0.5) * 0.6, vy: 0.9, life: 0.9, size: 0.09, sizeEnd: 0.01, color: this.red, intensity: 2.5 });
+      const before = pk.age;
+      pk.age += dt;
+      if (pk.kind === 'potion') {
+        // Still: a found flask stands where it fell, with a small glint every couple of seconds
+        // so one at the edge of the view isn't dead.
+        pk.object.position.y = 0;
+        const period = 2.2;
+        if (Math.floor((before + pk.base.x) / period) !== Math.floor((pk.age + pk.base.x) / period)) {
+          for (let k = 0; k < 3; k++) this.glow.spawn({ x: pk.base.x + (Math.random() - 0.5) * 0.3, y: 0.5 + Math.random() * 0.3, z: pk.base.z + (Math.random() - 0.5) * 0.3, vy: 0.4, life: 0.5, size: 0.07, sizeEnd: 0.01, color: this.red, intensity: 3 });
+        }
+        continue;
       }
+      if (pk.kind === 'heart') {
+        // Hops out, then bobs and turns; its glow fades after a moment.
+        pk.object.position.y = Math.max(0, Math.sin(Math.min(1, pk.age / 0.35) * Math.PI) * 0.6) + Math.sin(t * 3 + pk.base.x) * 0.05;
+        pk.object.rotation.y = t * 2;
+        const m = (pk.object.children[0] as THREE.Mesh).material as THREE.MeshStandardMaterial;
+        m.emissiveIntensity = Math.max(0.25, 1.4 - pk.age * 0.5);
+        // Close by, it drifts to you.
+        const d = pk.base.distanceTo(this.hero.position.clone().setY(0));
+        if (pk.age > 0.4 && d < 2.6) {
+          pk.base.lerp(this.hero.position.clone().setY(0), Math.min(1, dt * 6));
+          pk.object.position.x = pk.base.x;
+          pk.object.position.z = pk.base.z;
+        }
+        continue;
+      }
+      // The crystal floats and turns under its beam.
+      pk.object.position.y = Math.sin(t * 1.6) * 0.12;
+      pk.object.rotation.y = t * 0.8;
     }
   }
 
   private collectPickups(): void {
     this.pickups = this.pickups.filter((pk) => {
-      if (pk.base.distanceTo(this.hero.position.clone().setY(0)) > 1.3) return true;
-      if (this.potions >= this.maxPotions) return true;
+      if (pk.base.distanceTo(this.hero.position.clone().setY(0)) > (pk.kind === 'heart' ? 0.9 : 1.3)) {
+        pk.bumped = false;
+        return true;
+      }
+      const hero = this.hero;
+      if (pk.kind === 'heart') {
+        this.telemetry.heartsPicked++;
+        const gain = Math.round(hero.maxHp * 0.12);
+        hero.hp = Math.min(hero.maxHp, hero.hp + gain);
+        this.audio.play('potion');
+        this.floatAt(pk.base, 1.4, `+${gain}`, 'heal');
+        this.scene.remove(pk.object);
+        disposeOwned(pk.object);
+        return false;
+      }
+      if (pk.kind === 'crystal') {
+        this.bonusHp += 25;
+        this.applyBlessings();
+        hero.hp = hero.maxHp;
+        this.ui.setHero(hero.def, this.heroName, hero.maxHp);
+        this.ui.setBlessings(this.blessings, BLESSINGS);
+        this.ui.setCoins(this.coins, false);
+        this.audio.play('clear');
+        this.burst(pk.base.clone().setY(1.2), new THREE.Color('#ff7ba0'), 60, 5);
+        this.floatAt(pk.base, 2, '+25 max health', 'crit');
+        this.scene.remove(pk.object);
+        disposeOwned(pk.object);
+        return false;
+      }
+      if (this.potions >= this.maxPotions) {
+        this.telemetry.bagFull++;
+        if (!pk.bumped) {
+          pk.bumped = true;
+          this.audio.play('block');
+          this.floatAt(pk.base, 1.4, 'Bag full', 'info');
+          this.tip('bag-full', 'Your potion bag is full. Drink one with <kbd>H</kbd> to make room.', 3);
+        }
+        return true;
+      }
       this.potions++;
+      this.telemetry.potionsPicked++;
       this.audio.play('pickup');
       this.floatAt(pk.base, 1.6, 'Potion +1', 'heal');
       this.scene.remove(pk.object);
@@ -3881,21 +4516,33 @@ export class Game {
       this.ui.threat(null);
       return;
     }
-    let best: Enemy | null = null;
-    let bestD = 9;
+    // The nearest monster swinging out of view gets the full warning; failing that, the nearest
+    // one waiting out of view for its first blow gets a dim, still one the whole time it waits.
+    const w = this.renderer.gl.domElement.clientWidth;
+    const h = this.renderer.gl.domElement.clientHeight;
+    let swing: Enemy | null = null;
+    let wait: Enemy | null = null;
+    let swingD = 9;
+    let waitD = 9;
     for (const e of this.enemies) {
-      if (!e.active || !(e.state === 'windup' || e.state === 'charge')) continue;
+      if (!e.active) continue;
+      const swinging = e.state === 'windup' || e.state === 'charge';
+      const waiting = !swinging && e.state === 'chase' && e.spawnedAt >= 0 && e.offscreenSince >= 0;
+      if (!swinging && !waiting) continue;
       const d = e.position.distanceTo(this.hero.position);
-      if (d >= bestD) continue;
+      if (d >= (swinging ? swingD : waitD)) continue;
       const head = this.toScreen(e.position, e.def.scale * 1.6);
-      const w = this.renderer.gl.domElement.clientWidth;
-      const h = this.renderer.gl.domElement.clientHeight;
-      const visible = head.on && head.x > 0 && head.x < w && head.y > 0 && head.y < h;
-      if (visible) continue;
-      best = e;
-      bestD = d;
+      if (head.on && head.x > 0 && head.x < w && head.y > 0 && head.y < h) continue;
+      if (swinging) {
+        swing = e;
+        swingD = d;
+      } else {
+        wait = e;
+        waitD = d;
+      }
     }
-    this.ui.threat(best ? this.relativeAngle(best.position) : null);
+    const best = swing ?? wait;
+    this.ui.threat(best ? this.relativeAngle(best.position) : null, !swing && !!wait);
   }
 
   /** Takes a monster out of the scene and frees what it owned (skeleton, materials, warning ring and lane). */
@@ -4079,34 +4726,6 @@ export class Game {
   }
 }
 
-/** A white heart with a soft red glow, drawn once for every potion's floating marker. */
-function makeHeartTexture(): THREE.Texture {
-  const size = 128;
-  const canvas = document.createElement('canvas');
-  canvas.width = canvas.height = size;
-  const ctx = canvas.getContext('2d')!;
-  const heart = (): void => {
-    ctx.beginPath();
-    ctx.moveTo(64, 104);
-    ctx.bezierCurveTo(20, 74, 14, 46, 30, 32);
-    ctx.bezierCurveTo(44, 20, 60, 26, 64, 40);
-    ctx.bezierCurveTo(68, 26, 84, 20, 98, 32);
-    ctx.bezierCurveTo(114, 46, 108, 74, 64, 104);
-    ctx.closePath();
-  };
-  ctx.shadowColor = 'rgba(255, 40, 80, 0.95)';
-  ctx.shadowBlur = 22;
-  ctx.fillStyle = '#ff3b5c';
-  heart();
-  ctx.fill();
-  ctx.shadowBlur = 0;
-  ctx.lineWidth = 7;
-  ctx.strokeStyle = '#ffffff';
-  ctx.stroke();
-  const texture = new THREE.CanvasTexture(canvas);
-  texture.colorSpace = THREE.SRGBColorSpace;
-  return texture;
-}
 
 /**
  * Frees the GPU buffers a hall owned when it is torn down: instanced piece

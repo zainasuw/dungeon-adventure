@@ -2,12 +2,15 @@ import { HERO_CLASSES, type HeroClass, type HeroClassId, type SlotKey } from '..
 import { DIFFICULTIES, LEVELS, MAX_POTIONS, PILLAR_HALLS, PILLARS, type DifficultyId, type SaveData } from '../game/levels';
 import { ICONS, type IconName } from './icons';
 import type { Blessing, BlessingLevels } from '../game/blessings';
+import { tellHost } from '../core/host';
 
 /** Hero order on the select screen, as in the original game. */
 export const HERO_ORDER: HeroClassId[] = ['warrior', 'priestess', 'thief', 'doctor'];
 
 export interface UiHandlers {
   newQuest(): void;
+  /** Starts the same hero and difficulty on the same dungeon (same seed). */
+  replaySeed(): void;
   continueQuest(): void;
   /** `loud` adds a cheer and a sound (clicks and keys); hovering is quiet. */
   previewHero(id: HeroClassId, loud: boolean): void;
@@ -38,6 +41,8 @@ export interface UiHandlers {
 const SLOT_CODE: Record<SlotKey, string> = { LMB: 'KeyF', RMB: 'KeyG', SPACE: 'Space', Q: 'KeyR' };
 
 export interface QuestStats {
+  /** The run's seed, shown so a run can be replayed or reported. */
+  seed?: string;
   heroName: string;
   hero: HeroClass;
   difficulty: DifficultyId;
@@ -47,6 +52,8 @@ export interface QuestStats {
   potionsUsed: number;
   time: number;
   coins: number;
+  /** Coins lying where the hero fell (defeat card), 0 if none. */
+  lostCoins?: number;
 }
 
 export type FloatKind = 'damage' | 'crit' | 'hurt' | 'heal' | 'info' | 'block';
@@ -78,6 +85,10 @@ const PILLAR_PATH =
 function icon(path: string, className = 'icon', rule: 'nonzero' | 'evenodd' = 'nonzero'): string {
   return `<svg class="${className}" viewBox="0 0 512 512" aria-hidden="true"><path fill-rule="${rule}" d="${path}"/></svg>`;
 }
+
+const SPEAKER = 'M64 192h96l128-112v352L160 320H64z';
+const SOUND_ON = `${SPEAKER} M336 184a96 96 0 0 1 0 144l-24-24a64 64 0 0 0 0-96z M384 128a160 160 0 0 1 0 256l-28-28a120 120 0 0 0 0-200z`;
+const SOUND_OFF = `${SPEAKER} M336 200l24-24l56 56l56-56l24 24l-56 56l56 56l-24 24l-56-56l-56 56l-24-24l56-56z`;
 
 function iconByName(name: IconName, className?: string): string {
   return icon(ICONS[name], className);
@@ -117,6 +128,7 @@ export class Ui {
   private selectState = { hero: 'warrior' as HeroClassId, name: '', difficulty: 'easy' as DifficultyId };
   private overlayReturn: (() => void) | null = null;
   private muted = false;
+  private soundBtn: HTMLButtonElement | null = null;
   private blessPick: ((i: number) => void) | null = null;
 
   // HUD parts, filled by setHero.
@@ -350,7 +362,7 @@ export class Ui {
       this.focusFirst('[data-act="camera"]');
     });
     this.on('mute', () => {
-      this.muted = this.handlers.toggleMute();
+      this.setMuted(this.handlers.toggleMute());
       this.showPause();
       this.focusFirst('[data-act="mute"]');
     });
@@ -392,8 +404,9 @@ export class Ui {
       'gameover',
       `<div class="card card--end" role="dialog" aria-modal="true" aria-labelledby="go-title">
         <h2 id="go-title" class="card__title">${escapeHtml(stats.heroName || `The ${stats.hero.name}`)} fell in ${hall}</h2>
-        <p class="card__text">${stats.pillars ? `Don't give up! You keep your ${stats.pillars} ${stats.pillars === 1 ? 'pillar' : 'pillars'} and start this hall fresh.` : 'Don\'t give up! Try this hall again, fresh and full of health.'}</p>
+        <p class="card__text">${stats.pillars ? `Don't give up! You keep your ${stats.pillars} ${stats.pillars === 1 ? 'pillar' : 'pillars'}. Try this hall again, full of health.` : 'Don\'t give up! Try this hall again, full of health.'}${stats.lostCoins ? ` Your ${stats.lostCoins} coins lie where you fell.` : ''}</p>
         ${this.pillarRow(stats.pillars)}
+        ${stats.seed ? `<p class="card__seed">Dungeon ${stats.seed} · <button type="button" class="link-btn link-btn--inline" data-act="replay">Play this dungeon again</button></p>` : ''}
         <p class="card__tip">${['Tip: when a red ring appears under a skeleton, press <kbd>Space</kbd> to dodge out of it.', 'Tip: drink a potion with <kbd>H</kbd> when your health gets low.', 'Tip: Easy mode has gentler monsters and more potions.', 'Tip: hold <kbd>F</kbd> to keep swinging at a monster.'][Math.floor(Math.random() * 4)]}</p>
         <div class="stack">
           <button class="btn btn--primary" data-act="retry">Try again</button>
@@ -403,6 +416,7 @@ export class Ui {
       </div>`,
     );
     this.on('retry', () => this.handlers.restartLevel());
+    this.on('replay', () => this.handlers.replaySeed());
     this.on('hero', () => this.handlers.changeHero());
     this.on('quit', () => this.handlers.backToTitle());
     this.focusFirst();
@@ -421,6 +435,7 @@ export class Ui {
           ${stat('Time', formatTime(stats.time))}
           ${stat('Skeletons beaten', String(stats.kills))}
         </div>
+        ${stats.seed ? `<p class="card__seed">Dungeon ${stats.seed} · <button type="button" class="link-btn link-btn--inline" data-act="replay">Play this dungeon again</button></p>` : ''}
         <div class="stack stack--row">
           <button class="btn btn--primary" data-act="again">Play again</button>
           <button class="btn" data-act="quit">Back to title</button>
@@ -428,6 +443,7 @@ export class Ui {
       </div>`,
     );
     this.on('again', () => this.handlers.changeHero());
+    this.on('replay', () => this.handlers.replaySeed());
     this.on('quit', () => this.handlers.backToTitle());
     this.focusFirst();
   }
@@ -510,7 +526,7 @@ export class Ui {
   }
 
   /** The travelling merchant's shop: a few things to spend coins on. */
-  showShop(items: ShopItem[], coins: number, onBuy: (i: number) => void, onLeave: () => void): void {
+  showShop(items: ShopItem[], coins: number, onBuy: (i: number) => void, onLeave: () => void, bagFull = false): void {
     const art: Record<ShopItem['icon'], string> = {
       potion: icon(POTION_PATH, 'icon', 'evenodd'),
       heal: iconByName('regeneration'),
@@ -527,6 +543,7 @@ export class Ui {
           <span class="bless__text">${it.text}</span>
           <span class="shop-item__price">${it.sold ? 'Sold!' : `<i class="coin-dot"></i>${it.price}`}</span>
           ${poor ? `<span class="shop-item__need">Need ${it.price - coins} more coins</span>` : ''}
+          ${bagFull && it.icon === 'potion' && !it.sold ? '<span class="shop-item__need">Your bag is full</span>' : ''}
         </button>`;
       })
       .join('');
@@ -579,9 +596,9 @@ export class Ui {
   }
 
   /** A red chevron at the edge of the view toward a monster that is about to strike from out of view, or null. */
-  threat(angle: number | null): void {
+  threat(angle: number | null, dim = false): void {
     if (angle === null) {
-      this.threatEl?.classList.remove('threat--on');
+      this.threatEl?.classList.remove('threat--on', 'threat--dim');
       return;
     }
     if (!this.threatEl) {
@@ -590,6 +607,7 @@ export class Ui {
     }
     this.threatEl.style.setProperty('--a', `${angle}rad`);
     this.threatEl.classList.add('threat--on');
+    this.threatEl.classList.toggle('threat--dim', dim);
   }
 
   /** The floating "go here" marker in first person, or null to hide it. */
@@ -712,8 +730,33 @@ export class Ui {
 
   // ───────────────────────── HUD ─────────────────────────
 
+  /**
+   * The sound button: always in the top-right corner, on every screen (title, hero select,
+   * play, shop, cards), next to the pause button during play. One tap mutes everything.
+   */
+  setMuted(muted: boolean): void {
+    this.muted = muted;
+    if (!this.soundBtn) {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'icon-btn sound-btn';
+      btn.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        this.setMuted(this.handlers.toggleMute());
+        btn.blur();
+      });
+      this.root.append(btn);
+      this.soundBtn = btn;
+    }
+    this.soundBtn.innerHTML = icon(muted ? SOUND_OFF : SOUND_ON);
+    this.soundBtn.setAttribute('aria-label', muted ? 'Turn sound on' : 'Mute sound');
+    this.soundBtn.setAttribute('aria-pressed', String(muted));
+    this.soundBtn.title = muted ? 'Sound off (M)' : 'Sound on (M)';
+  }
+
   showHud(visible: boolean): void {
     this.hud.classList.toggle('hud--hidden', !visible);
+    this.soundBtn?.classList.toggle('sound-btn--beside-pause', visible);
     if (!visible) {
       this.prompt(null);
       this.hint(null);
@@ -1061,6 +1104,8 @@ export class Ui {
       } else if (name === 'select') {
         e.preventDefault();
         this.handlers.backToTitle();
+      } else if (name === 'title') {
+        tellHost('escape');
       }
       return;
     }

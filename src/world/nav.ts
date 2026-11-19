@@ -137,6 +137,41 @@ export class NavGrid {
     return out.lengthSq() > 1e-6 ? out.normalize() : null;
   }
 
+  /**
+   * Walking distance (metres, around obstacles) from a point to the last target
+   * `update()` was given, or Infinity when the point is off the map or walled off.
+   */
+  walkDistance(x: number, z: number): number {
+    let i = this.index(x, z);
+    if (i < 0) return Infinity;
+    if (this.blocked[i]) i = this.nearestOpen(i);
+    if (i < 0) return Infinity;
+    return this.dist[i] * this.cell;
+  }
+
+  /** Is this point on open floor (clear of walls and props by the grid's clearance)? */
+  isOpen(x: number, z: number): boolean {
+    const i = this.index(x, z);
+    return i >= 0 && !this.blocked[i];
+  }
+
+  /**
+   * Every open cell whose walking distance to the target lies in [min, max] metres,
+   * as world points. Used to pick where a monster may appear.
+   */
+  cellsWithin(min: number, max: number, out: THREE.Vector3[] = []): THREE.Vector3[] {
+    const { cols, dist, blocked, cell } = this;
+    for (let i = 0; i < dist.length; i++) {
+      if (blocked[i]) continue;
+      const d = dist[i] * cell;
+      if (d < min || d > max) continue;
+      const c = i % cols;
+      const r = (i - c) / cols;
+      out.push(new THREE.Vector3(this.minX + (c + 0.5) * cell, 0, this.minZ + (r + 0.5) * cell));
+    }
+    return out;
+  }
+
   private index(x: number, z: number): number {
     const c = Math.floor((x - this.minX) / this.cell);
     const r = Math.floor((z - this.minZ) / this.cell);

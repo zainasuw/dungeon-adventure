@@ -5,3 +5,6 @@ dist/
 .impeccable/
 .notes/
 HANDOFF.md
+.notes/tests/rng.mjs
+PRODUCT.md
+DESIGN.md
