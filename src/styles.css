@@ -89,10 +89,7 @@ body {
   padding: 0 16px;
   font: 700 clamp(48px, 6.4vw, 96px) / 1 var(--serif);
   text-align: center;
-  background: linear-gradient(180deg, #fff1c4 0%, #f3d27a 45%, #c08a2c 100%);
-  -webkit-background-clip: text;
-  background-clip: text;
-  color: transparent;
+  color: #f3d27a;
   filter: drop-shadow(0 4px 22px rgba(0, 0, 0, 0.8));
   animation: title-breathe 2.4s ease-in-out infinite;
 }
@@ -343,10 +340,7 @@ kbd {
   margin: 0;
   padding-top: 4px;
   font: 700 clamp(48px, 6.4vw, 96px) / 1 var(--serif);
-  background: linear-gradient(180deg, #fff1c4 0%, #f3d27a 45%, #c08a2c 100%);
-  -webkit-background-clip: text;
-  background-clip: text;
-  color: transparent;
+  color: #f3d27a;
   filter: drop-shadow(0 4px 22px rgba(0, 0, 0, 0.8));
 }
 
@@ -3155,4 +3149,74 @@ body.menu-open .crosshair {
   .sound-btn--beside-pause {
     right: 72px;
   }
+}
+
+/* Card screens scroll when they are taller than the window (phones, sideways phones), so
+   their buttons can always be reached by touch. */
+.screen--pause,
+.screen--howto,
+.screen--gameover,
+.screen--victory,
+.screen--bless,
+.screen--paths,
+.screen--shop {
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  align-items: safe center;
+  touch-action: pan-y;
+}
+.quest__hall:empty {
+  display: none;
+}
+/* The King's bar is up: tips sit above it instead of under it. */
+.boss-on .hint {
+  bottom: 262px;
+}
+/* Phones: the sound button goes under the pause button, clear of the coin count. */
+@media (max-width: 640px) {
+  .sound-btn--beside-pause {
+    top: 70px;
+    right: 10px;
+  }
+}
+
+/* Hurt in first person: a short red pulse at the edges of the view. */
+.hurt-edge {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+  box-shadow: inset 0 0 120px 24px rgba(210, 30, 30, 0.6);
+  animation: hurt-edge 0.45s ease-out forwards;
+}
+@keyframes hurt-edge {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .hurt-edge {
+    animation-duration: 0.2s;
+  }
+}
+
+/* A close monster in front is about to strike: the bottom of the view glows red (its floor ring is out of frame). */
+.windup-warn {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 34%;
+  z-index: 1;
+  pointer-events: none;
+  background: radial-gradient(ellipse 60% 100% at 50% 100%, rgba(230, 40, 30, 0.5), rgba(230, 40, 30, 0) 70%);
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+.windup-warn--on {
+  opacity: 1;
 }

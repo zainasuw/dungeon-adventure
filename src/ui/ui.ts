@@ -245,7 +245,11 @@ export class Ui {
       });
     });
     this.screen.querySelectorAll<HTMLButtonElement>('[data-diff]').forEach((b) =>
-      b.addEventListener('click', () => this.pickDifficulty(b.dataset.diff as DifficultyId)),
+      b.addEventListener('click', () => {
+        this.pickDifficulty(b.dataset.diff as DifficultyId);
+        // Back to Start, so Enter still starts and the arrows still change hero.
+        this.screen.querySelector<HTMLElement>('[data-act="start"]')?.focus({ preventScroll: true });
+      }),
     );
     this.on('back', () => this.handlers.backToTitle());
     this.on('prev', () => this.stepHero(-1));
@@ -415,7 +419,7 @@ export class Ui {
         </div>
       </div>`,
     );
-    this.on('retry', () => this.handlers.restartLevel());
+    this.on('retry', () => this.handlers.restartLevel(), 700);
     this.on('replay', () => this.handlers.replaySeed());
     this.on('hero', () => this.handlers.changeHero());
     this.on('quit', () => this.handlers.backToTitle());
@@ -442,9 +446,9 @@ export class Ui {
         </div>
       </div>`,
     );
-    this.on('again', () => this.handlers.changeHero());
-    this.on('replay', () => this.handlers.replaySeed());
-    this.on('quit', () => this.handlers.backToTitle());
+    this.on('again', () => this.handlers.changeHero(), 1200);
+    this.on('replay', () => this.handlers.replaySeed(), 1200);
+    this.on('quit', () => this.handlers.backToTitle(), 1200);
     this.focusFirst();
   }
 
@@ -595,6 +599,24 @@ export class Ui {
     node.addEventListener('animationend', () => node.remove(), { once: true });
   }
 
+  /** First person: a red glow along the bottom of the view while a close monster in front is winding up. */
+  windupWarn(on: boolean): void {
+    if (!this.windupEl) {
+      if (!on) return;
+      this.windupEl = el('div', 'windup-warn');
+      this.root.append(this.windupEl);
+    }
+    this.windupEl.classList.toggle('windup-warn--on', on);
+  }
+  private windupEl: HTMLElement | null = null;
+
+  /** First person: the edges of the view pulse red when the hero is hurt. */
+  hurtEdge(): void {
+    const node = el('div', 'hurt-edge');
+    this.root.append(node);
+    node.addEventListener('animationend', () => node.remove(), { once: true });
+  }
+
   /** A red chevron at the edge of the view toward a monster that is about to strike from out of view, or null. */
   threat(angle: number | null, dim = false): void {
     if (angle === null) {
@@ -635,6 +657,7 @@ export class Ui {
     let bar = this.root.querySelector<HTMLElement>('.boss-bar');
     if (!name) {
       bar?.classList.remove('boss-bar--on');
+      this.root.classList.remove('boss-on');
       return;
     }
     if (!bar) {
@@ -642,6 +665,7 @@ export class Ui {
       this.root.append(bar);
     }
     bar.classList.add('boss-bar--on');
+    this.root.classList.add('boss-on');
     bar.querySelector('.boss-bar__name')!.textContent = name;
     (bar.querySelector('.boss-bar__fill') as HTMLElement).style.transform = `scaleX(${Math.max(0, fraction)})`;
     (bar.querySelector('.boss-bar__lag') as HTMLElement).style.transform = `scaleX(${Math.max(0, fraction)})`;
@@ -702,7 +726,8 @@ export class Ui {
 
   /** A big title card for entering a hall or claiming a pillar. */
   banner(kicker: string, title: string, sub: string, seconds = 2.8): void {
-    this.bannerEl.innerHTML = `<h2 class="banner__title">${title}</h2><p class="banner__sub">${kicker} · ${sub}</p>`;
+    const line = [kicker, sub].filter(Boolean).join(' · ');
+    this.bannerEl.innerHTML = `<h2 class="banner__title">${title}</h2>${line ? `<p class="banner__sub">${line}</p>` : ''}`;
     this.bannerEl.classList.remove('banner--show');
     void this.bannerEl.offsetWidth;
     this.bannerEl.classList.add('banner--show');
@@ -788,7 +813,6 @@ export class Ui {
           </div>
           <div class="bar bar--res" aria-hidden="true"><span class="bar__fill"></span></div>
           <div class="plate__blessings"></div>
-          <p class="plate__passive">${iconByName('holySymbol', 'icon icon--tiny')} ${def.passive.name}: ${def.passive.text}</p>
         </div>
       </div>
       <div class="quest">
@@ -842,7 +866,8 @@ export class Ui {
 
   setQuest(level: number, pillars: number, stage = pillars): void {
     const l = LEVELS[level];
-    this.hallEl.textContent = l.boss ? `Final battle · ${l.hall}` : `Hall ${stage + 1} of ${PILLAR_HALLS} · ${l.hall}`;
+    this.hallEl.textContent = '';
+    void l;
     this.pillarsEl.innerHTML = PILLARS.map(
       (p, i) =>
         `<span class="pip ${i < pillars ? 'pip--lit' : ''} ${i === stage && i >= pillars ? 'pip--now' : ''}" style="--pip:${p.color}" title="Pillar of ${p.name}">${icon(PILLAR_PATH)}</span>`,
@@ -1065,8 +1090,11 @@ export class Ui {
     document.body.classList.add('menu-open');
   }
 
-  private on(act: string, fn: () => void): void {
-    this.screen.querySelector(`[data-act="${act}"]`)?.addEventListener('click', fn);
+  private on(act: string, fn: () => void, holdMs = 0): void {
+    const shown = performance.now();
+    this.screen.querySelector(`[data-act="${act}"]`)?.addEventListener('click', () => {
+      if (performance.now() - shown >= holdMs) fn();
+    });
   }
 
   private focusFirst(selector = '.btn'): void {

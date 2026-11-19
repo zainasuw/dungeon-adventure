@@ -74,24 +74,40 @@ export function buildApproach(o: ApproachOptions): Approach {
       kit.instance(pick(rng, trees), x + outward.x * 2.8, 0, z + outward.y * 2.8, rng() * 6, 2.2 + rng() * 0.6);
     }
   };
+  // A wall piece is 4 wide but an opening (the 4-wide corridor) can straddle two pieces:
+  // check each half of the piece, and where only one half is closed, place a half wall
+  // there, so the corridor is never walled over.
+  const halfEdge = (x: number, z: number, rot: number, outward: THREE.Vector2) => {
+    if (style === 'stone') kit.instance('wall_half', x, 0, z, rot);
+    else if (style === 'trees') edge(x, z, rot, true, outward);
+  };
   for (const r of built) {
     const isCorridor = r === corridor;
     for (let x = r.x0 + 2; x < r.x1; x += 4) {
-      if (!openAt(x, r.z0 - 0.6)) {
+      const n0 = !openAt(x - 1, r.z0 - 0.6);
+      const n1 = !openAt(x + 1, r.z0 - 0.6);
+      if (n0 && n1) {
         edge(x, r.z0, 0, false, new THREE.Vector2(0, -1));
         if (!isCorridor && rng() < 0.6) torchSpots.push([x, r.z0 + 0.5, 0]);
-      }
-      if (!openAt(x, r.z1 + 0.6)) edge(x, r.z1, Math.PI, true, new THREE.Vector2(0, 1));
+      } else if (n0 || n1) halfEdge(n0 ? x - 1 : x + 1, r.z0, 0, new THREE.Vector2(0, -1));
+      const s0 = !openAt(x - 1, r.z1 + 0.6);
+      const s1 = !openAt(x + 1, r.z1 + 0.6);
+      if (s0 && s1) edge(x, r.z1, Math.PI, true, new THREE.Vector2(0, 1));
+      else if (s0 || s1) halfEdge(s0 ? x - 1 : x + 1, r.z1, Math.PI, new THREE.Vector2(0, 1));
     }
     for (let z = r.z0 + 2; z < r.z1; z += 4) {
-      if (!openAt(r.x0 - 0.6, z)) {
+      const w0 = !openAt(r.x0 - 0.6, z - 1);
+      const w1 = !openAt(r.x0 - 0.6, z + 1);
+      if (w0 && w1) {
         edge(r.x0, z, QUARTER, false, new THREE.Vector2(-1, 0));
         if (!isCorridor && rng() < 0.4) torchSpots.push([r.x0 + 0.5, z, QUARTER]);
-      }
-      if (!openAt(r.x1 + 0.6, z)) {
+      } else if (w0 || w1) halfEdge(r.x0, w0 ? z - 1 : z + 1, QUARTER, new THREE.Vector2(-1, 0));
+      const e0 = !openAt(r.x1 + 0.6, z - 1);
+      const e1 = !openAt(r.x1 + 0.6, z + 1);
+      if (e0 && e1) {
         edge(r.x1, z, -QUARTER, false, new THREE.Vector2(1, 0));
         if (!isCorridor && rng() < 0.4) torchSpots.push([r.x1 - 0.5, z, -QUARTER]);
-      }
+      } else if (e0 || e1) halfEdge(r.x1, e0 ? z - 1 : z + 1, -QUARTER, new THREE.Vector2(1, 0));
     }
   }
   if (style === 'stone') {

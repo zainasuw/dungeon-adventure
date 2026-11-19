@@ -159,7 +159,7 @@ export class Character {
       const k = this.flashTime / this.flashDuration;
       for (const m of this.materials) {
         m.material.emissive.copy(m.base).lerp(this.flashColor, k);
-        m.material.emissiveIntensity = THREE.MathUtils.lerp(m.baseIntensity, 2.2, k);
+        m.material.emissiveIntensity = THREE.MathUtils.lerp(m.baseIntensity, 1.3, k);
       }
       if (this.flashTime === 0) this.flashDuration = 0;
     }

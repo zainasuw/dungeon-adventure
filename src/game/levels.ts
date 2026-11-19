@@ -120,7 +120,8 @@ export const LEVELS: Level[] = [
     sleepers: ['skeleton', 'runt', 'skeleton', 'mage'],
     waves: [['runt', 'charger', 'skeleton']],
     potions: [[-18, -9], [18, 10.5], [0, -11]],
-    job: { kind: 'lanterns', spots: [[-13, 7], [13, 7], [0, -9]] },
+    // The third lantern stands beside the path to the door, not on it.
+    job: { kind: 'lanterns', spots: [[-13, 7], [13, 7], [-3.2, -9]] },
   },
   {
     view: { yaw: 0, pitch: 44, distance: 20 },

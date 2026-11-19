@@ -195,6 +195,12 @@ export class Enemy extends Character {
   chargeLeft = 0;
   /** First person: when this monster was first refused an attack for being out of view (see the game's mayAttack). */
   offscreenSince = -1;
+  /** Extra reach while the player is in first person, so a monster can strike from further off the camera. */
+  reachBonus = 0;
+  /** How far this monster's blow reaches right now. */
+  get reach(): number {
+    return this.def.reach + (this.def.ranged ? 0 : this.reachBonus);
+  }
   /** When the player first had it in frame after it appeared (telemetry: sight to first swing). */
   firstSeenAt = -1;
   /** Has the player been warned of this one (a rattle when it first comes into view)? */
@@ -355,7 +361,7 @@ export class Enemy extends Character {
     }
     this.blocksInRow = 0;
     this.hp = Math.max(0, this.hp - amount);
-    this.flash('#ffffff', 0.12);
+    this.flash('#ffffff', 0.08);
     this.jolt(from, Math.min(1.4, 0.6 + amount / 40));
     this.knock.copy(this.position).sub(from).setY(0);
     if (this.knock.lengthSq() > 0.0001) this.knock.normalize().multiplyScalar(knockback / Math.sqrt(this.def.scale));
@@ -499,17 +505,17 @@ export class Enemy extends Character {
       else if (dist < def.ranged.keepAway - 1.5) this.steer.copy(dir).negate();
       if (dist < def.reach && this.cooldown <= 0 && ctx.mayAttack(this)) return this.startAttack(dir);
     } else {
-      if (dist > def.reach * 0.8) {
+      if (dist > this.reach * 0.8) {
         // Far away: follow the walking map around pillars; close up: go straight in.
         const around = dist > 1.8 ? ctx.path(this.position, this.route) : null;
         if (around) this.steer.copy(around);
         else this.steer.copy(this.toTarget).divideScalar(Math.max(dist, 0.001));
       }
-      if (dist < def.reach && this.cooldown <= 0) {
+      if (dist < this.reach && this.cooldown <= 0) {
         if (ctx.mayAttack(this)) return this.startAttack(this.toTarget.clone().divideScalar(Math.max(dist, 0.001)));
         // Waiting for a turn: step around the hero instead of crowding in.
         this.steer.set(-this.toTarget.z, 0, this.toTarget.x).normalize().multiplyScalar(this.slide * 0.6);
-        if (dist < def.reach * 0.7) this.steer.addScaledVector(this.toTarget, -0.6 / Math.max(dist, 0.001));
+        if (dist < this.reach * 0.7) this.steer.addScaledVector(this.toTarget, -0.6 / Math.max(dist, 0.001));
       }
     }
 

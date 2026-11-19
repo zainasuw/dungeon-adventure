@@ -150,6 +150,8 @@ export class Game {
   /** The reward promised by the door the player picked, given when that hall is cleared. */
   private pathReward: PathReward | null = null;
   private pathAsked = false;
+  /** A blessing is owed for the hall just cleared: the door waits until it has been chosen. */
+  private blessingPending = false;
   private stage = 0;
   private pillars = 0;
   private potions = 1;
@@ -940,6 +942,7 @@ export class Game {
         this.restless.push({ grave, spot, enemy, stirred: false, stirredAt: -10, seenFor: 0, woken: false, lastStir: -10, lastRattle: -10 });
       });
     }
+    this.blessingPending = false;
     if (this.retrying) this.hallAttempt++;
     else {
       this.hallAttempt = 0;
@@ -1006,8 +1009,8 @@ export class Game {
     this.later(delay + 9, () => this.tip('camera', this.camStyle === 'first' ? 'Turn your head with the mouse, the <kbd>←</kbd> <kbd>→</kbd> arrow keys, or <kbd>Q</kbd> / <kbd>E</kbd>' : 'Look around: right-click and drag, or hold <kbd>Q</kbd> / <kbd>E</kbd>'));
     if (level.boss) this.startBossFight(intro ? 2.4 : 0.8);
     const banner = level.boss
-      ? () => this.ui.banner('Final battle', level.hall, 'Defeat the Skeleton King to escape!')
-      : () => this.ui.banner(`Hall ${this.stage + 1} of ${PILLAR_HALLS}`, level.hall, `Guarding the Pillar of ${PILLARS[this.stage]?.name}`);
+      ? () => this.ui.banner('', level.hall, '')
+      : () => this.ui.banner('', level.hall, '');
     if (this.dark > 0) {
       // Banner comes when the torch is lit.
     } else if (intro) this.later(delay, banner);
@@ -1043,7 +1046,8 @@ export class Game {
     if (this.bossCalls.length && f <= this.bossCalls[0] && king.alive) {
       this.bossCalls.shift();
       const second = this.bossCalls.length === 0;
-      this.ui.banner('The King roars', second ? 'Guards, again!' : 'Guards, to me!', second ? 'He is weakening. Keep going!' : 'Beat his guards, then strike the King');
+      void second;
+      this.ui.hint(null);
       this.audio.play('rise');
       this.shake(0.35);
       this.spawnWave([...this.difficulty.bossGuards]);
@@ -1074,7 +1078,8 @@ export class Game {
     this.crypt.door.open();
     this.audio.play('victory');
     this.shake(0.5);
-    this.ui.banner('Victory!', 'The Skeleton King is defeated', 'The golden door is open. Escape!', 4);
+    this.ui.hint(null);
+    this.ui.banner('', 'The Skeleton King is defeated!', '', 4);
     this.ui.objective('Escape through the golden door!');
     if (this.hero.state === 'free') this.hero.animator.play('Cheer', { loop: false, fade: 0.15, restart: true });
   }
@@ -2116,11 +2121,8 @@ export class Game {
     this.later(0.6, () => this.audio.play('door'));
     const last = this.pillars >= PILLAR_HALLS;
     const left = PILLAR_HALLS - this.pillars;
-    this.ui.banner(
-      `Pillar ${this.pillars} of ${PILLAR_HALLS}`,
-      `Pillar of ${PILLARS[this.stage]?.name}`,
-      last ? 'All four pillars! The way to the Skeleton King is open' : `${left} more to go! Follow the gold marker to the door`,
-    );
+    void left;
+    this.ui.banner('', last ? 'All four pillars!' : 'Pillar awake!', '');
     this.later(2.5, () => this.crypt.altar.settle());
     // A reward for clearing the hall: a potion when the bag can use one, coins otherwise.
     this.later(1.2, () => {
@@ -2131,6 +2133,7 @@ export class Game {
       this.burst(at.clone().setY(1), this.heal, 30, 3);
     });
     this.ui.objective(last ? 'Face the Skeleton King! Follow the gold marker to the door' : 'Follow the gold marker to the golden door');
+    this.blessingPending = true;
     this.later(2.9, () => this.offerBlessings());
     if (this.hero.state === 'free') this.hero.animator.play('Cheer', { loop: false, fade: 0.15, restart: true });
   }
@@ -2757,7 +2760,8 @@ export class Game {
       this.guideToDoor(dt);
       const p = hero.position;
       const door = this.crypt.doorAt;
-      if (this.crypt.door.isOpen && p.z < door.z + 1.9 && Math.abs(p.x - door.x) < 2.6) this.exitHall();
+      // The door waits for the blessing choice, so the card never opens under the walk-out.
+      if (this.crypt.door.isOpen && !this.blessingPending && !this.choosing && p.z < door.z + 1.9 && Math.abs(p.x - door.x) < 2.6) this.exitHall();
     }
 
     this.updateArrow(dt);
@@ -3005,7 +3009,11 @@ export class Game {
       // Keep monsters from standing inside the hero.
       const dx = e.position.x - this.hero.position.x;
       const dz = e.position.z - this.hero.position.z;
-      const min = e.radius + this.hero.radius;
+      // In first person a monster at arm's length fills the screen: it stays just inside its own
+      // reach instead of pressing against the camera.
+      const touch = e.radius + this.hero.radius;
+      e.reachBonus = this.firstPerson ? 0.55 : 0;
+      const min = this.firstPerson ? Math.max(touch, Math.min(e.reach - 0.15, 2.25)) : touch;
       const d2 = dx * dx + dz * dz;
       if (!e.summoning && d2 < min * min && d2 > 1e-6) {
         const d = Math.sqrt(d2);
@@ -3051,7 +3059,7 @@ export class Game {
     const facing = new THREE.Vector3(Math.sin(e.facing), 0, Math.cos(e.facing));
     const inArc = dist < 1.1 || this.tmp.normalize().dot(facing) > 0.15;
     this.audio.play('swing');
-    if (dist > e.def.reach + hero.radius || !inArc || !hero.alive) return;
+    if (dist > e.reach + hero.radius || !inArc || !hero.alive) return;
     const before = hero.hp;
     this.damageHero(e.def.damage * this.difficulty.enemyDamage, e.position);
     if (hero.hp < before && this.lvl('thorns') && e.alive) {
@@ -3122,6 +3130,7 @@ export class Game {
     }
     this.floatAt(hero.position, 2.3, `-${Math.round(taken)}`, 'hurt');
     if (this.firstPerson && this.fp.markers) this.ui.hitFrom(this.relativeAngle(from));
+    if (this.firstPerson) this.ui.hurtEdge();
     this.audio.play('hurt');
     this.shake(0.22);
     hero.jolt(from, 1);
@@ -3212,7 +3221,13 @@ export class Game {
       this.later(0.5, () => (reward === 'potion' ? this.dropPotion(at) : this.dropHeart(at)));
       return;
     }
-    this.dropCoins(at, worth);
+    if (e.def.kind === 'king' && worth > 12) {
+      // The King's hoard: most of it goes straight to the purse, a dozen coins spill a moment later,
+      // so his fall is not hidden behind a cloud of gold.
+      this.coins += worth - 12;
+      this.ui.setCoins(this.coins, true);
+      this.later(1.5, () => this.dropCoins(at, 12));
+    } else this.dropCoins(at, worth);
     // A small heart, likelier the more you are hurt and the longer since the last one (Doom
     // and Diablo drop health where the fight is); a big monster counts as two chances.
     const big = e.def.kind === 'brute' || e.def.kind === 'charger' || e.def.kind === 'king';
@@ -3362,7 +3377,7 @@ export class Game {
         this.later(0.2, () => this.audio.play('clear'));
         this.burst(b.position.clone().setY(1.4), this.fireColor, 60, 4);
         this.ui.objective('Follow the gold marker to the altar');
-        this.later(0.8, () => this.ui.banner(`Hall 1 of ${PILLAR_HALLS}`, LEVELS[this.level].hall, `Guarding the Pillar of ${PILLARS[0].name}`));
+        this.later(0.8, () => this.ui.banner('', LEVELS[this.level].hall, ''));
       }
       return;
     }
@@ -3505,6 +3520,12 @@ export class Game {
       c.age += dt;
       const p = c.mesh.position;
       const d = Math.hypot(hero.x - p.x, hero.z - p.z);
+      if (c.age > 0.5 && d < 3.2 && this.firstPerson) {
+        // First person: coins this close go straight to the purse instead of flying at the eyes.
+        this.scene.remove(c.mesh);
+        got++;
+        return false;
+      }
       if (c.age > 0.5 && d < 3.2) {
         const pull = 14 * dt;
         p.x += (hero.x - p.x) * Math.min(1, pull / Math.max(d, 0.3));
@@ -3715,9 +3736,15 @@ export class Game {
   }
 
   private offerBlessings(): void {
-    if (this.phase !== 'play' || !this.hero.alive) return;
+    if (this.phase !== 'play' || !this.hero.alive || this.step === 'exiting') {
+      this.blessingPending = false;
+      return;
+    }
     const options = rollBlessings(this.blessings);
-    if (!options.length) return;
+    if (!options.length) {
+      this.blessingPending = false;
+      return;
+    }
     this.choosing = true;
     this.input.clear();
     this.ui.prompt(null);
@@ -3727,6 +3754,7 @@ export class Game {
   }
 
   private takeBlessing(b: Blessing): void {
+    this.blessingPending = false;
     this.blessings[b.id] = (this.blessings[b.id] ?? 0) + 1;
     this.applyBlessings();
     const hero = this.hero;
@@ -3750,9 +3778,14 @@ export class Game {
   /** Teaches something once, the first time it matters. */
   private tip(id: string, html: string, seconds = 5): void {
     if (this.tipsShown.has(id)) return;
+    // One tip at a time, well apart, and never over a blow that is about to land.
+    if (this.time - this.lastTipAt < 20) return;
+    if (this.enemies.some((e) => e.alive && (e.state === 'windup' || e.state === 'charge'))) return;
     this.tipsShown.add(id);
+    this.lastTipAt = this.time;
     this.ui.hint(html, seconds);
   }
+  private lastTipAt = -100;
 
   /** Easy mode drinks a potion by itself when health runs low. */
   private autoPotion(dt: number): void {
@@ -4482,6 +4515,7 @@ export class Game {
 
     this.updateWaypoint();
     this.updateThreatMarker();
+    this.ui.windupWarn(this.firstPerson && !this.paused && !this.choosing && this.enemies.some((e) => e.alive && e.active && e.state === 'windup' && e.position.distanceTo(this.hero.position) < 3.6 && this.inFrame(e)));
     if (this.paused) return;
     if (this.brazier && !this.brazier.lit && this.introTimer <= 0) {
       // Just under the torch, so it never hides behind the goal line at the top.
@@ -4496,7 +4530,8 @@ export class Game {
     } else if (this.step === 'cleared' && this.crypt.door.isOpen) {
       const s = this.toScreen(this.crypt.doorAt.clone().add(new THREE.Vector3(0, 0, 1.4)), 0.2);
       const next = LEVELS[this.route[this.stage + 1]];
-      this.ui.prompt(!next ? 'Escape!' : next.boss ? 'To the King' : 'Next hall', s.x, s.y);
+      if (!next) this.ui.prompt('Escape!', s.x, s.y);
+      else this.ui.prompt(null);
     } else {
       this.ui.prompt(null);
     }

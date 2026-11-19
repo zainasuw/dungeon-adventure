@@ -8,6 +8,9 @@ export interface Box {
   maxZ: number;
 }
 
+/** Props no wider than this (metres) let a body slip round them: barrels, crates, lanterns. */
+const SLIP_SIZE = 1;
+
 /** Axis-aligned walls and props on the floor plane, plus the room's inner bounds. */
 export class Colliders {
   readonly boxes: Box[] = [];
@@ -34,19 +37,25 @@ export class Colliders {
     this.boxes.push({ minX: box.min.x + shrink, maxX: box.max.x - shrink, minZ: box.min.z + shrink, maxZ: box.max.z - shrink });
   }
 
-  /** Pushes a circle out of every box and keeps it inside the room. */
+  /**
+   * Pushes a circle out of every box and keeps it inside the room. Walking square into a
+   * small prop (a barrel, a crate, a lantern) slips you round it instead of stopping you
+   * dead; walls, pillars and furniture still stop you.
+   */
   resolve(p: THREE.Vector3, radius: number): void {
     const b = this.bounds;
     p.x = THREE.MathUtils.clamp(p.x, b.minX + radius, b.maxX - radius);
     p.z = THREE.MathUtils.clamp(p.z, b.minZ + radius, b.maxZ - radius);
     if (this.areas && !this.inArea(p.x, p.z)) {
-      // Slipped outside the floor: back onto the nearest bit of floor.
+      // Slipped outside the floor: back to the nearest edge of it. The areas are already
+      // drawn for the middle of a body, so the edge itself is where it stops; stepping
+      // further in would throw a body leaning on an edge back and forth every few frames.
       let best = Infinity;
       let bx = p.x;
       let bz = p.z;
       for (const a of this.areas) {
-        const x = THREE.MathUtils.clamp(p.x, a.minX + radius, a.maxX - radius);
-        const z = THREE.MathUtils.clamp(p.z, a.minZ + radius, a.maxZ - radius);
+        const x = THREE.MathUtils.clamp(p.x, a.minX, a.maxX);
+        const z = THREE.MathUtils.clamp(p.z, a.minZ, a.maxZ);
         const d = (x - p.x) ** 2 + (z - p.z) ** 2;
         if (d < best) {
           best = d;
@@ -68,6 +77,13 @@ export class Colliders {
         const d = Math.sqrt(d2);
         p.x = cx + (dx / d) * radius;
         p.z = cz + (dz / d) * radius;
+        // Met on a flat side of something small: step sideways, away from its middle, by as
+        // much as was pushed back, so the next steps carry on round its corner.
+        if (box.maxX - box.minX <= SLIP_SIZE && box.maxZ - box.minZ <= SLIP_SIZE) {
+          const push = radius - d;
+          if (dx === 0) p.x += p.x >= (box.minX + box.maxX) / 2 ? push : -push;
+          else if (dz === 0) p.z += p.z >= (box.minZ + box.maxZ) / 2 ? push : -push;
+        }
       } else {
         // Center is inside the box: leave along the shortest axis.
         const left = p.x - box.minX + radius;

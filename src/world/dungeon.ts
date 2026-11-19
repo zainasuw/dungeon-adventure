@@ -256,7 +256,8 @@ export function buildDungeon(assets: Assets, embers: Particles, themeIndex: numb
     spawnPoints: [new THREE.Vector3(-6, 0, -25), new THREE.Vector3(6, 0, -25), new THREE.Vector3(-8, 0, -39), new THREE.Vector3(8, 0, -39), new THREE.Vector3(0, 0, -39)],
     theme: themeIndex,
     hazards: [],
-    crateSpots: [new THREE.Vector3(-8.4, 0, -0.4), new THREE.Vector3(8.4, 0, 0.2), new THREE.Vector3(23.6, 0, -3.8), new THREE.Vector3(28.6, 0, -4.4), new THREE.Vector3(-4.4, 0, 18.6)],
+    // The treasure room's first barrel stands beside its doorway, clear of the way in.
+    crateSpots: [new THREE.Vector3(-8.4, 0, -0.4), new THREE.Vector3(8.4, 0, 0.2), new THREE.Vector3(23.4, 0, -0.9), new THREE.Vector3(28.6, 0, -4.4), new THREE.Vector3(-4.4, 0, 18.6)],
     chest: { position: new THREE.Vector3(26, 0, -8.6), facing: 0 },
     halfX: (all.x1 - all.x0) / 2,
     halfZ: (all.z1 - all.z0) / 2,

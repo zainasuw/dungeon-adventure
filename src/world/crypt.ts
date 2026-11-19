@@ -203,17 +203,18 @@ const THEMES: Theme[] = [
       for (const x of [-7.4, 7.4]) {
         for (const z of [-7, 0, 7]) block(kit.single('wall_shelves', x, 0, z, x < 0 ? QUARTER : -QUARTER, 0.8));
       }
-      solid('table_long_broken', -2.6, 12.6, QUARTER);
-      solid('table_long_broken', 2.6, 12.6, QUARTER);
-      kit.instance('chair', -4, 0, 13.4, 0.3);
-      kit.instance('chair', 4, 0, 13.2, -0.4);
+      // The two reading tables leave an aisle a hero fits through, straight up the middle.
+      solid('table_long_broken', -3.1, 12.6, QUARTER);
+      solid('table_long_broken', 3.1, 12.6, QUARTER);
+      kit.instance('chair', -4.5, 0, 13.4, 0.3);
+      kit.instance('chair', 4.5, 0, 13.2, -0.4);
       solid('shelf_small_candles', -10.4, -13.6, QUARTER);
       solid('shelf_small_candles', 10.4, 13.6, -QUARTER);
       kit.instance('candle_triple', -2.6, 0, -14.6, 0.2);
       kit.instance('candle_triple', 2.6, 0, -14.6, -0.2);
       kit.instance('candle_melted', -10, 0, 9.8, 0);
       kit.instance('coin_stack_medium', 9.8, 0, -9.4, 0.4);
-      for (const [x, z] of [[-2.6, 12.6], [2.6, 12.6]]) torches.addCandle(new THREE.Vector3(x, 1.25, z));
+      for (const [x, z] of [[-3.1, 12.6], [3.1, 12.6]]) torches.addCandle(new THREE.Vector3(x, 1.25, z));
     },
   },
   // 4. The Ember Deep: a forge. Grated floor, a ring of carved pillars, braziers and spike traps.
