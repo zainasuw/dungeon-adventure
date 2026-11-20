@@ -98,13 +98,13 @@ export class CameraRig {
       // A small dead band in between, so tiny changes along a wall don't pump the camera.
       if (clear < this.pull - 0.02) this.pull = damp(this.pull, clear, 16, dt);
       else if (clear > this.pull + 0.06) this.pull = damp(this.pull, clear, 3, dt);
-      // Squeezed by a wall: come in closer AND rise up to look down over the hero,
-      // instead of pressing against the back of their head. Capped, so a corner never
-      // turns into a view from straight above.
-      const lift = Math.min(2.4, (1 - this.pull) * this.distance * 0.6);
+      // Squeezed by a wall: come in along the same line, as a third-person camera does, with
+      // a small rise. The rise is small on purpose: the view stays behind the hero and never
+      // turns into one from above (the game fades the hero out when the lens gets this close).
+      const lift = Math.min(0.5, (1 - this.pull) * 0.8);
       this.offset.x *= this.pull;
       this.offset.z *= this.pull;
-      this.offset.y += lift;
+      this.offset.y = this.offset.y * this.pull + lift;
     } else this.pull = 1;
     this.camera.position.copy(this.focus).add(this.offset);
     this.camera.lookAt(this.focus);

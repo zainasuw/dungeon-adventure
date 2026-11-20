@@ -103,7 +103,7 @@ export const LEVELS: Level[] = [
     pillar: '',
     hall: 'The Throne of Bones',
     mood: 5,
-    crystal: '#c77dff',
+    crystal: '#f3e2b0',
     sleepers: [],
     waves: [],
     potions: [[-12.5, 8], [12.5, 8], [-12.5, -6], [12.5, -6]],

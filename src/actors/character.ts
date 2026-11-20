@@ -21,6 +21,10 @@ export class Character {
   private readonly flashColor = new THREE.Color();
   private flashTime = 0;
   private flashDuration = 0.1;
+  /** A held colour over the whole body (frozen, chilled), 0..1; the hit flash sits on top of it. */
+  private readonly tintColor = new THREE.Color();
+  private tintK = 0;
+  private tintLive = false;
   /**
    * Life in the body, cheaply: every character has its own clock offset so a crowd never
    * moves in lockstep; it leans into turns and speed; and a hit sets off a small spring on
@@ -67,13 +71,15 @@ export class Character {
    * `flip` turns a prop end over end and `tilt` leans it forward or back, so a
    * staff can stand upright in the idle pose instead of trailing on the floor.
    */
-  hold(prop: THREE.Object3D, hand: Hand, flip = false, tilt = 0): void {
+  hold(prop: THREE.Object3D, hand: Hand, flip = false, tilt = 0, own = false): void {
     const bone = this.model.getObjectByName(hand === 'right' ? 'handslotr' : 'handslotl');
     if (!bone) throw new Error('Character has no hand slot');
     const mount = new THREE.Group();
     mount.rotation.set(tilt, hand === 'right' ? Math.PI : 0, flip ? Math.PI : 0);
     prop.traverse((o) => {
       o.castShadow = true;
+      // `own`: the prop gets its own material, so it can fade and glow with this character alone.
+      if (own && o instanceof THREE.Mesh && o.material instanceof THREE.MeshStandardMaterial) this.ownMaterial(o);
     });
     mount.add(prop);
     bone.add(mount);
@@ -90,6 +96,38 @@ export class Character {
       entry.material.emissive.set(color);
       entry.material.emissiveIntensity = intensity;
     });
+  }
+
+  /** Gives a mesh of this character its own copy of its material, tracked for flashes and fades. */
+  ownMaterial(mesh: THREE.Mesh): THREE.MeshStandardMaterial {
+    const copy = (mesh.material as THREE.MeshStandardMaterial).clone();
+    copy.userData.shared = false;
+    copy.userData.elementOwn = true;
+    mesh.material = copy;
+    this.materials.push({ material: copy, base: copy.emissive.clone(), baseIntensity: copy.emissiveIntensity });
+    return copy;
+  }
+
+  private opacity = 1;
+  /** Fades the body (1 = solid). Used when the camera is squeezed right up behind the hero. */
+  setOpacity(value: number): void {
+    const o = value > 0.98 ? 1 : value;
+    if (o === this.opacity) return;
+    this.opacity = o;
+    for (const m of this.materials) {
+      // Dithered, not blended: a blended body shows its own inside through its back.
+      if (m.material.alphaHash !== o < 1) {
+        m.material.alphaHash = o < 1;
+        m.material.needsUpdate = true;
+      }
+      m.material.opacity = o;
+    }
+  }
+
+  /** Holds a colour over the body until set back to 0. */
+  tint(color: THREE.ColorRepresentation, strength: number): void {
+    this.tintColor.set(color);
+    this.tintK = strength;
   }
 
   flash(color: THREE.ColorRepresentation, duration = 0.1): void {
@@ -154,14 +192,19 @@ export class Character {
       const sway = 0.01 * Math.sin(this.clock * 0.9 + this.seed) + 0.006 * Math.sin(this.clock * 0.37 + this.seed * 1.7);
       this.model.rotation.set(this.leanFwd + this.springPitch + this.riseTilt, sway, this.lean + this.springRoll);
     }
-    if (this.flashTime > 0 || this.flashDuration > 0) {
+    if (this.flashTime > 0 || this.flashDuration > 0 || this.tintK > 0 || this.tintLive) {
       this.flashTime = Math.max(0, this.flashTime - dt);
-      const k = this.flashTime / this.flashDuration;
+      const k = this.flashDuration > 0 ? this.flashTime / this.flashDuration : 0;
+      const t = this.tintK;
       for (const m of this.materials) {
-        m.material.emissive.copy(m.base).lerp(this.flashColor, k);
-        m.material.emissiveIntensity = THREE.MathUtils.lerp(m.baseIntensity, 1.3, k);
+        m.material.emissive.copy(m.base);
+        if (t > 0) m.material.emissive.lerp(this.tintColor, t * 0.7);
+        m.material.emissive.lerp(this.flashColor, k * 0.4);
+        m.material.emissiveIntensity = THREE.MathUtils.lerp(THREE.MathUtils.lerp(m.baseIntensity, 0.85, t), 1.3, k);
       }
       if (this.flashTime === 0) this.flashDuration = 0;
+      // One more pass after the tint ends puts every material back.
+      this.tintLive = t > 0;
     }
   }
 }

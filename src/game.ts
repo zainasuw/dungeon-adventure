@@ -11,7 +11,7 @@ import { CameraRig } from './core/camera-rig';
 import { dampAngle } from './core/math';
 import { Input } from './core/input';
 import { Audio } from './game/audio';
-import { BLESSINGS, rollBlessings, type Blessing, type BlessingLevels } from './game/blessings';
+import { BLESSINGS, rollBlessings, heldElement, type Blessing, type BlessingLevels } from './game/blessings';
 import { clearSave, DEFAULT_ROUTE, DIFFICULTIES, PATH_POOL, randomRoute, type PathReward, LEVELS, loadSave, MAX_POTIONS, PILLAR_HALLS, PILLARS, writeSave, type Difficulty, type DifficultyId, type SaveData } from './game/levels';
 import { MOODS, type Mood } from './render/moods';
 import { Renderer } from './render/renderer';
@@ -98,6 +98,10 @@ interface Chest {
   box: { minX: number; maxX: number; minZ: number; maxZ: number };
   position: THREE.Vector3;
   opened: boolean;
+  /** The lid, and how far it has swung open (0 shut .. 1 open). */
+  lid: THREE.Object3D | null;
+  lidRest: THREE.Vector3;
+  openT: number;
 }
 
 interface Timer {
@@ -203,7 +207,7 @@ export class Game {
   private readonly portalGeometry = new THREE.PlaneGeometry(2.2, 2.2);
   private readonly portalTexture = Game.makePortalTexture();
   private readonly laneTexture = Game.makeLaneTexture();
-  private readonly portalColor = new THREE.Color('#b25cff');
+  private readonly portalColor = new THREE.Color('#7fe9ff');
   /** The travelling merchant who sets up shop in a cleared hall. */
   private merchant: { who: Character; props: THREE.Group; box: Crate['box']; items: ShopItem[] } | null = null;
   /** Max health bought at the shop (kept for the whole quest). */
@@ -226,6 +230,19 @@ export class Game {
   /** Ambush rooms in a connected dungeon: their monsters sleep until the hero walks in. */
   private ambushes: { encounter: Encounter; monsters: Enemy[]; sprung: boolean }[] = [];
   private coinsOnFloor: Coin[] = [];
+  /** Loose bones a beaten skeleton breaks into: they fly from the blow, bounce and sink away. */
+  /** Gold Spark: sparks in flight to their next monster. `depth` counts the jumps so a chain ends. */
+  private sparks: { pos: THREE.Vector3; target: Enemy; depth: number; life: number }[] = [];
+  private sparkDepth = 0;
+  /** Share of the window's height the picture is raised by in the behind view. */
+  private frameLift = 0;
+  /** How solid the hero is drawn, 0..1. */
+  private heroFade = 1;
+  /** The weapon meshes that carry the power's colour, in the hand and on the hero. */
+  private weaponGlow: { mesh: THREE.Mesh; mat: THREE.MeshStandardMaterial; base: THREE.Color; baseI: number; hand: boolean }[] = [];
+  private bones: { object: THREE.Object3D; velocity: THREE.Vector3; spin: THREE.Vector3; age: number; rest: number }[] = [];
+  /** How far the weapon hand is kicked back by a blow that just landed (first person), 0..1. */
+  private handKick = 0;
   private chest: Chest | null = null;
   /** The Skeleton King, while the boss room is live. */
   private boss: Enemy | null = null;
@@ -280,10 +297,11 @@ export class Game {
    */
   private camStyle: 'first' | 'behind' | 'top' = (() => {
     try {
+      // Behind the hero unless the player has chosen another view: close fights read best from there.
       const v = localStorage.getItem('dungeon-adventure:view');
-      return v === 'top' || v === 'behind' ? v : 'first';
+      return v === 'top' || v === 'first' ? v : 'behind';
     } catch {
-      return 'first';
+      return 'behind';
     }
   })();
   /** First person: where you're looking (yaw like the hero's facing; pitch up is positive). */
@@ -412,6 +430,10 @@ export class Game {
   private readonly white = new THREE.Color('#ffffff');
   private readonly woodColor = new THREE.Color('#a0703f');
   private readonly fireColor = new THREE.Color('#ff8a2a');
+  private readonly frostColor = new THREE.Color('#bfeaff');
+  private readonly sparkColor = new THREE.Color('#ffe27a');
+  /** On the weapon itself the colours are deeper than the sparks, so the blade keeps its shape. */
+  private readonly weaponTint = { fire: new THREE.Color('#ff5a0c'), frost: new THREE.Color('#58c6ff'), spark: new THREE.Color('#ffc21a') };
   private readonly smokeColor = new THREE.Color('#5a5560');
   private readonly moonDust = new THREE.Color('#bcd0ff');
   private readonly gold = new THREE.Color('#ffc35a');
@@ -943,6 +965,7 @@ export class Game {
       });
     }
     this.blessingPending = false;
+    this.ui.hint(null);
     if (this.retrying) this.hallAttempt++;
     else {
       this.hallAttempt = 0;
@@ -1004,9 +1027,9 @@ export class Game {
     }
     const delay = intro ? 1.1 : 0;
     this.later(delay + 2.6, () =>
-      this.tip('walk', this.camStyle === 'first' ? 'Walk with <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd>. <b>Click</b>, then move the mouse to look around' : 'Walk with <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> or the arrow keys'),
+      this.tip('walk', 'Walk with <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd>'),
     );
-    this.later(delay + 9, () => this.tip('camera', this.camStyle === 'first' ? 'Turn your head with the mouse, the <kbd>←</kbd> <kbd>→</kbd> arrow keys, or <kbd>Q</kbd> / <kbd>E</kbd>' : 'Look around: right-click and drag, or hold <kbd>Q</kbd> / <kbd>E</kbd>'));
+    this.later(delay + 9, () => this.tip('camera', this.camStyle === 'first' ? 'Look around with the mouse' : 'Look around: hold <kbd>Q</kbd> or <kbd>E</kbd>'));
     if (level.boss) this.startBossFight(intro ? 2.4 : 0.8);
     const banner = level.boss
       ? () => this.ui.banner('', level.hall, '')
@@ -1033,7 +1056,7 @@ export class Game {
       this.later(Enemy.TELL, () => this.shake(0.4));
       this.ui.bossBar('Skeleton King', 1);
       this.ui.objective('Defeat the Skeleton King! Dodge out of the red rings');
-      this.later(1.5, () => this.tip('boss', 'Big red ring = a huge slam is coming. Press <kbd>Space</kbd> to dodge out!', 6));
+      this.later(1.5, () => this.tip('boss', 'Big red ring: dodge with <kbd>Space</kbd>!', 5));
     });
   }
 
@@ -1055,7 +1078,7 @@ export class Game {
     if (f <= 0.5 && king.animSpeed === 1 && king.alive) {
       king.enrage();
       this.floatAt(king.position, 4.6, 'Enraged!', 'crit');
-      this.tip('enraged', 'The King is angry: his slams now throw bones. Dodge them!');
+      this.tip('enraged', 'His slams throw bones now. Dodge!');
     }
   }
 
@@ -1096,6 +1119,9 @@ export class Game {
 
   private clearActors(): void {
     this.restless = [];
+    for (const b of this.bones) this.scene.remove(b.object);
+    this.bones = [];
+    this.sparks = [];
     for (const e of this.enemies) this.removeEnemy(e);
     this.rings.clear();
     this.lanes.clear();
@@ -1427,7 +1453,7 @@ export class Game {
   }
 
 
-  /** A soft glowing circle with a bright rim and a few rune ticks, drawn once. */
+  /** A soft glowing disc with a brighter rim, drawn once. */
   private static makePortalTexture(): THREE.CanvasTexture {
     const size = 256;
     const c = document.createElement('canvas');
@@ -1443,14 +1469,6 @@ export class Game {
     fill.addColorStop(1, 'rgba(255,255,255,0)');
     g.fillStyle = fill;
     g.fillRect(0, 0, size, size);
-    g.strokeStyle = 'rgba(255,255,255,0.8)';
-    g.lineWidth = 5;
-    for (let i = 0; i < 8; i++) {
-      const a = (i / 8) * Math.PI * 2;
-      g.beginPath();
-      g.arc(mid, mid, mid * 0.66, a, a + 0.32);
-      g.stroke();
-    }
     const tex = new THREE.CanvasTexture(c);
     tex.colorSpace = THREE.SRGBColorSpace;
     return tex;
@@ -1594,7 +1612,7 @@ export class Game {
     if (!m) return;
     m.who.updateVisuals(dt);
     if (m.who.animator.progress >= 1) m.who.animator.play('Idle');
-    if (!this.choosing && m.who.position.distanceTo(this.hero.position) < 9) this.tip('shop', 'A <b>merchant</b>! Walk up and press <kbd>F</kbd> to spend your coins.', 6);
+    if (!this.choosing && m.who.position.distanceTo(this.hero.position) < 9) this.tip('shop', 'A <b>merchant</b>! Press <kbd>F</kbd> to shop.', 5);
     if (this.nearMerchant() && (this.input.keyPressed('KeyF') || this.input.keyPressed('KeyJ'))) this.openShop();
   }
 
@@ -1670,7 +1688,7 @@ export class Game {
     leaf: new THREE.Color('#6fae4a'),
     mote: new THREE.Color('#bfe6ff'),
     ember: new THREE.Color('#ff7a2a'),
-    royal: new THREE.Color('#c77dff'),
+    royal: new THREE.Color('#f3e2b0'),
     dust: new THREE.Color('#e8d6a8'),
   };
 
@@ -1749,8 +1767,8 @@ export class Game {
         book.name = 'book';
         object.add(book);
       } else {
-        // Cursed purple, so it stands out on any floor (the Ember Deep is all orange).
-        object = makeCrystal('#a24dff');
+        // Cold ice-blue, so it stands out on any floor (the Ember Deep is all orange).
+        object = makeCrystal('#7fe9ff');
       }
       // A golden circle on the floor marks it as part of the job (the
       // graveyard has other, decorative lanterns).
@@ -1806,10 +1824,10 @@ export class Game {
   private jobIntro(): string {
     const job = LEVELS[this.level].job;
     const n = this.jobItems.length;
-    if (job?.kind === 'lanterns') return `Light the <b>${n} lanterns</b> to wake the pillar. Walk up and press <kbd>F</kbd>. Careful, the graves are restless!`;
-    if (job?.kind === 'books') return `Find the <b>${n} lost spell books</b> to wake the pillar. Walk over a book to grab it.`;
-    if (job?.kind === 'crystals') return `Smash the <b>${n} cursed crystals</b> to wake the pillar. Hit each one with <kbd>F</kbd>.`;
-    if (job?.kind === 'wisps') return `Catch the <b>${n} runaway wisps</b> to wake the pillar. They float away, so chase them into a corner!`;
+    if (job?.kind === 'lanterns') return `Light the <b>${n} lanterns</b> with <kbd>F</kbd>.`;
+    if (job?.kind === 'books') return `Find the <b>${n} lost books</b>.`;
+    if (job?.kind === 'crystals') return `Smash the <b>${n} crystals</b> with <kbd>F</kbd>.`;
+    if (job?.kind === 'wisps') return `Catch the <b>${n} wisps</b>.`;
     return '';
   }
 
@@ -1895,7 +1913,7 @@ export class Game {
         const mat = (core as THREE.Mesh).material as THREE.MeshStandardMaterial;
         mat.emissiveIntensity = 1.2 + Math.sin(t * 3 + j.seed) * 0.3 + j.flash * 3;
         if (Math.random() < dt * 6) this.glow.spawn({ x: j.at.x + (Math.random() - 0.5) * 1, y: 0.4 + Math.random() * 2, z: j.at.z + (Math.random() - 0.5) * 1, vy: 0.5, life: 1, size: 0.07, sizeEnd: 0.01, color: this.portalColor, intensity: 2.5 });
-        if (hero.alive && j.at.distanceTo(hero.position) < 4) this.tip('crystal', 'Hit the crystal with <kbd>F</kbd> to smash it!', 5);
+        if (hero.alive && j.at.distanceTo(hero.position) < 4) this.tip('crystal', 'Smash it with <kbd>F</kbd>!', 4);
       }
     }
   }
@@ -2022,7 +2040,7 @@ export class Game {
     this.shake(0.35);
     this.audio.play('pillar');
     this.ui.objective('The skeletons are waking up! Defeat them all');
-    this.later(1.2, () => this.tip('attack', 'Press <kbd>F</kbd> to attack. Hold it to keep swinging. Your hero aims for you!', 6));
+    this.later(1.2, () => this.tip('attack', 'Hold <kbd>F</kbd> to attack.', 5));
     let n = 0;
     this.enemies.forEach((e) => {
       if (e.state !== 'dormant' || this.waitingInAmbush(e)) return;
@@ -2100,7 +2118,7 @@ export class Game {
     e.spawnedWhere.copy(e.position);
     this.audio.play('rattle');
     this.puff(entry.mouth, 10);
-    this.tip('entrance', 'Listen: bones are stirring. Skeletons come in from the <b>side niches</b> and the <b>way you came</b>!', 5);
+    this.tip('entrance', 'Listen: skeletons are coming!', 4);
     this.later(0.5, () => {
       if (!e.alive) return;
       e.emerge();
@@ -2396,6 +2414,8 @@ export class Game {
 
   /** Copies the hero's weapon (and shield or book) into the first-person view. */
   private buildViewmodel(): void {
+    // Put the hero's weapon back to plain first: the copy below must not start out tinted.
+    this.clearElementLook();
     if (this.viewmodel) this.camera.remove(this.viewmodel.group);
     const group = new THREE.Group();
     const shown = (o: THREE.Object3D): boolean => {
@@ -2434,6 +2454,10 @@ export class Game {
       inner.traverse((o) => {
         if (o instanceof THREE.Mesh) {
           o.material = (o.material as THREE.Material).clone();
+          // The copy is always solid, even if the hero was faded when it was made.
+          (o.material as THREE.Material).userData.elementOwn = true;
+          (o.material as THREE.Material).alphaHash = false;
+          (o.material as THREE.Material).opacity = 1;
           (o.material as THREE.Material).depthTest = false;
           o.renderOrder = 10;
           o.castShadow = false;
@@ -2451,6 +2475,7 @@ export class Game {
     this.camera.add(group);
     if (!this.camera.parent) this.scene.add(this.camera);
     this.viewmodel = { group, right, left };
+    this.applyElementLook();
   }
 
   /** Holds the weapon low on the right, swaying a little; swings across on an attack. */
@@ -2468,6 +2493,9 @@ export class Game {
     const arc = Math.sin(s * Math.PI);
     // Ease out: a fast cut, then a soft settle back.
     const cut = 1 - Math.pow(1 - s, 3);
+    // A landed blow kicks the weapon hand back for a moment.
+    this.handKick *= Math.exp(-13 * dt);
+    const kick = this.handKick;
     if (vm.right) {
       vm.right.position.set(0.6, -0.6 + bob, -0.95);
       vm.right.rotation.set(-0.3, 0, -0.32);
@@ -2484,6 +2512,11 @@ export class Game {
         vm.right.rotation.x = -0.3 - arc * 0.7;
         vm.right.position.z = -0.95 - arc * 0.35;
       }
+    }
+    if (vm.right && kick > 0.01) {
+      vm.right.position.z += 0.1 * kick;
+      vm.right.position.y -= 0.03 * kick;
+      vm.right.rotation.x += 0.24 * kick;
     }
     if (vm.left) {
       vm.left.position.set(-0.64, -0.66 - bob + (this.hero.state === 'dash' ? 0.1 : 0), -1.0);
@@ -2523,6 +2556,20 @@ export class Game {
       this.rig.occlude = null;
       this.rig.followRate = 5;
     }
+    // Squeezed against a wall the camera comes in close: the hero turns see-through, so the
+    // hall ahead is never hidden behind the back of a head.
+    const eyeGap = behind ? this.camera.position.distanceTo(this.projected.copy(this.hero.position).setY(1.5)) : 99;
+    this.heroFade = THREE.MathUtils.damp(this.heroFade, THREE.MathUtils.clamp((eyeGap - 1.7) / 1.4, 0, 1), 10, dt);
+    this.hero.setOpacity(this.heroFade);
+    // Behind the hero the picture sits a little higher in the window, so the hero's feet and
+    // weapon stand above the action bar instead of under it.
+    this.frameLift = THREE.MathUtils.damp(this.frameLift, behind ? 0.07 : 0, 5, dt);
+    const size = this.renderer.bufferSize;
+    const liftPx = Math.round(this.frameLift * size.y);
+    const view = this.camera.view;
+    if (liftPx > 0) {
+      if (!view || !view.enabled || view.offsetY !== liftPx || view.fullWidth !== size.x || view.fullHeight !== size.y) this.camera.setViewOffset(size.x, size.y, 0, liftPx, size.x, size.y);
+    } else if (view?.enabled) this.camera.clearViewOffset();
     const playFov = this.firstPerson && this.establishing <= 0 ? this.fovFor(this.fp.fov, this.fp.fov + 18) : behind ? this.fovFor(52, 72) : this.fovFor(30);
     // Close to a wall the lens must not cut through it: a short near plane in first person.
     const near = this.firstPerson ? 0.1 : 0.5;
@@ -2713,7 +2760,10 @@ export class Game {
     this.updateBrazier(dt);
     this.updateBoss();
     this.updateCoins(dt);
-    this.updateChest();
+    this.updateBones(dt);
+    this.updateSparks(dt);
+    this.updateElementLook(dt);
+    this.updateChest(dt);
 
     // The hall's steps.
     const altarDist = hero.position.distanceTo(this.crypt.altar.position);
@@ -2767,19 +2817,19 @@ export class Game {
     this.updateArrow(dt);
     this.autoPotion(dt);
     if (this.pickups.some((k) => k.base.distanceTo(this.tmp.copy(hero.position).setY(0)) < 6)) {
-      this.tip('potion-seen', 'A <b>health potion</b>! Walk over it to put it in your bag.');
+      this.tip('potion-seen', 'A <b>potion</b>! Walk over it.');
     } else if (this.crates.some((c) => c.position.distanceTo(hero.position) < 3)) {
-      this.tip('crates', 'Smash barrels and crates with <kbd>F</kbd>. There might be a potion inside!');
+      this.tip('crates', 'Smash barrels with <kbd>F</kbd>.');
     }
     if (this.step === 'fight') {
       if (this.enemies.some((e) => e.chargeWarning)) {
-        this.tip('charge', 'Red lane = a <b>Shield Rammer</b> is about to charge. Step out of the lane!', 5);
+        this.tip('charge', 'Red lane: step out of it!', 4);
       }
       if (this.enemies.some((e) => e.telegraph > 0.2 && !e.def.charge && e.position.distanceTo(hero.position) < e.def.reach + 1.5)) {
-        this.tip('dodge', 'Red ring = a skeleton is about to hit. Press <kbd>Space</kbd> to dodge!');
+        this.tip('dodge', 'Red ring: dodge with <kbd>Space</kbd>!');
       }
-      if (hero.hp < hero.maxHp * 0.6 && this.potions > 0) this.tip('potion', 'Hurt? Press <kbd>H</kbd> to drink a potion');
-      if (this.kills >= 2) this.tip('special', 'Try your special move: <kbd>G</kbd>');
+      if (hero.hp < hero.maxHp * 0.6 && this.potions > 0) this.tip('potion', 'Hurt? Drink with <kbd>H</kbd>.');
+      if (this.kills >= 2) this.tip('special', 'Try your special: <kbd>G</kbd>');
     }
 
     if (!hero.alive) this.lose();
@@ -2943,7 +2993,7 @@ export class Game {
         this.puff(e.position, 14);
         this.audio.play('block');
         this.floatAt(e.position, e.def.scale * 2.4, 'Dazed!', 'crit');
-        this.tip('dazed', 'It hit the wall and is <b>dazed</b>! Now is your chance to hit it!', 4);
+        this.tip('dazed', 'It is <b>dazed</b>. Hit it now!', 4);
       },
     };
     // Refresh the walking map toward the hero a few times a second.
@@ -2966,6 +3016,14 @@ export class Game {
         }
       }
       if (!e.alive) continue;
+      if (e.thawed) {
+        e.thawed = false;
+        this.burst(e.position.clone().setY(1.1 * e.def.scale), this.frostColor, 12, 3);
+        this.audio.play('thaw');
+      }
+      if (e.frozen > 0 && Math.random() < dt * 7) {
+        this.glow.spawn({ x: e.position.x + (Math.random() - 0.5) * 0.7, y: 0.3 + Math.random() * 1.6 * e.def.scale, z: e.position.z + (Math.random() - 0.5) * 0.7, vy: -0.25, life: 0.7, size: 0.07, sizeEnd: 0.01, color: this.frostColor, intensity: 3 });
+      }
       if (e.burn > 0) {
         e.burn -= dt;
         e.burnTick -= dt;
@@ -3174,12 +3232,14 @@ export class Game {
     if (dealt === 0) {
       this.floatAt(e.position, head, 'Blocked', 'block');
       this.audio.play('block');
-      this.tip('shield', 'Its <b>shield</b> stops hits from the front. Hit it from the <b>side</b>, right after it swings, or keep hitting to knock the shield aside!', 6);
+      this.tip('shield', 'Hit shield skeletons from the <b>side</b>.', 5);
       return true;
     }
     this.floatAt(e.position, head, crit ? `${dealt} Crushing Blow!` : String(dealt), crit ? 'crit' : 'damage');
-    this.burst(e.position.clone().setY(1.1 * e.def.scale), crit ? this.gold : this.white, crit ? 26 : 10, crit ? 4.5 : 3);
+    // The blow sparks in the colour of the power on the weapon.
+    this.burst(e.position.clone().setY(1.1 * e.def.scale), crit ? this.gold : (this.elementColor() ?? this.white), crit ? 26 : 10, crit ? 4.5 : 3);
     if (!quiet) this.audio.play(crit ? 'crit' : 'hit');
+    this.handKick = 1;
     this.hitStop = Math.max(this.hitStop, crit ? 0.09 : 0.045);
     if (crit) this.shake(0.25);
     hero.resource = Math.min(100, hero.resource + 3);
@@ -3187,6 +3247,10 @@ export class Game {
     if (this.lvl('fire') && e.alive) {
       e.burn = 3;
       e.burnDps = 6 * this.lvl('fire');
+    }
+    if (this.lvl('frost') && e.alive && e.freeze(0.8 + 0.25 * this.lvl('frost'))) {
+      this.burst(e.position.clone().setY(1.1 * e.def.scale), this.frostColor, 16, 2.5);
+      this.audio.play('freeze');
     }
     if (!e.alive) this.onEnemyDied(e);
     // Thief: Surprise Attack.
@@ -3206,11 +3270,13 @@ export class Game {
 
   private onEnemyDied(e: Enemy): void {
     this.kills++;
+    this.launchSpark(e);
     const at = e.position.clone().setY(0);
     // Gold once per hall: on a retry the pile already holds it, so a kill shows bones and dust only.
     const worth = this.hallAttempt ? 0 : { runt: 2, skeleton: 3, mage: 4, brute: 6, charger: 4, king: 60 }[e.def.kind];
     this.audio.play('bones');
-    this.puff(e.position, 18);
+    this.puff(e.position, 6);
+    this.scatterBones(e);
     if (worth > 0) this.burst(e.position.clone().setY(1), this.gold, 18, 3);
     if (e.elite) {
       // An elite always pays: a potion if the bag can use one, otherwise a heart and extra coins.
@@ -3366,7 +3432,7 @@ export class Game {
       b.light.intensity = 4.5 + Math.sin(t * 2.3) * 1.2 + Math.sin(t * 7.1) * 0.6;
       if (Math.random() < 0.35) this.glow.spawn({ x: b.position.x + (Math.random() - 0.5) * 0.4, y: 1.3, z: b.position.z + (Math.random() - 0.5) * 0.4, vy: 0.5 + Math.random() * 0.5, vx: (Math.random() - 0.5) * 0.2, life: 1.1, size: 0.07, sizeEnd: 0.01, color: this.fireColor, intensity: 3 });
       if (Math.random() < 0.12) this.dust.spawn({ x: b.position.x, y: 1.7, z: b.position.z, vy: 0.5, vx: (Math.random() - 0.5) * 0.2, life: 2.2, size: 0.25, sizeEnd: 0.8, color: this.smokeColor, intensity: 0.35, drag: 0.4 });
-      if (near) this.tip('torch', 'Press <kbd>F</kbd> to light the torch', 8);
+      if (near) this.tip('torch', 'Light the torch with <kbd>F</kbd>.', 8);
       if (near && (this.input.keyPressed('KeyF') || this.input.keyPressed('KeyJ') || this.input.buttonPressed(0))) {
         b.lit = true;
         this.openingDone = true;
@@ -3460,13 +3526,31 @@ export class Game {
     const p = spot.position;
     const box = { minX: p.x - 0.8, maxX: p.x + 0.8, minZ: p.z - 0.55, maxZ: p.z + 0.55 };
     this.crypt.colliders.boxes.push(box);
-    this.chest = { object, box, position: p.clone(), opened: this.chestOpened };
+    const lid = piece.getObjectByName('chest_gold_lid') ?? null;
+    this.chest = { object, box, position: p.clone(), opened: this.chestOpened, lid, lidRest: lid ? lid.position.clone() : new THREE.Vector3(), openT: this.chestOpened ? 1 : 0 };
+    this.poseLid(this.chest);
     this.nav = new NavGrid(this.crypt.colliders);
   }
 
-  private updateChest(): void {
+  /** Swings the chest's lid up on its back edge (k: 0 shut .. 1 open, with a little overshoot on the way). */
+  private poseLid(chest: Chest): void {
+    if (!chest.lid) return;
+    const k = chest.openT;
+    const swing = k >= 1 ? 1 : 1 - Math.pow(1 - k, 3) + Math.sin(k * Math.PI) * 0.12;
+    chest.lid.rotation.x = -1.25 * swing;
+    chest.lid.position.set(chest.lidRest.x, chest.lidRest.y + 0.16 * swing, chest.lidRest.z - 0.3 * swing);
+  }
+
+  private updateChest(dt: number): void {
     const chest = this.chest;
-    if (!chest || chest.opened) return;
+    if (!chest) return;
+    if (chest.opened) {
+      if (chest.openT < 1) {
+        chest.openT = Math.min(1, chest.openT + dt / 0.55);
+        this.poseLid(chest);
+      }
+      return;
+    }
     const near = chest.position.distanceTo(this.hero.position) < 2.2;
     const ready = this.step === 'cleared';
     if (ready && Math.random() < 0.3) {
@@ -3474,27 +3558,209 @@ export class Game {
     }
     if (!near) return;
     if (!ready) {
-      this.tip('chest-locked', 'A treasure chest! It opens once the hall is cleared.');
+      this.tip('chest-locked', 'The chest opens when the hall is clear.');
       return;
     }
+    // A moment, not a pop: the chest rattles, the lid swings up, then the gold fountains out.
     chest.opened = true;
     this.chestOpened = true;
     this.audio.play('chest');
-    this.shake(0.2);
-    this.burst(chest.position.clone().setY(1.2), this.gold, 70, 5);
-    chest.object.scale.set(1.15, 0.85, 1.15);
+    chest.object.scale.set(1.08, 0.92, 1.08);
     this.later(0.15, () => chest.object.scale.setScalar(1));
     const out = chest.position.z > 0 ? -1 : 1;
     const beside = chest.position.clone().add(new THREE.Vector3(1.4, 0, out * 1.3));
-    if (this.stage === 2 && !this.crystalFound) {
-      this.dropCoins(chest.position.clone().add(new THREE.Vector3(0, 0, out)), 12 + this.stage * 4);
-      this.later(0.5, () => this.dropCrystal(beside));
-    } else {
-      const reward = this.loot.chestReward(this.potions);
-      this.dropCoins(chest.position.clone().add(new THREE.Vector3(0, 0, out)), 12 + this.stage * 4 + (reward === 'coins' ? 8 : 0));
-      if (reward === 'potion') this.later(0.4, () => this.dropPotion(beside));
+    const spill = chest.position.clone().add(new THREE.Vector3(0, 0, out));
+    const crystal = this.stage === 2 && !this.crystalFound;
+    const reward = crystal ? 'coins' : this.loot.chestReward(this.potions);
+    const coins = 12 + this.stage * 4 + (!crystal && reward === 'coins' ? 8 : 0);
+    this.later(0.5, () => {
+      this.shake(0.2);
+      this.burst(chest.position.clone().setY(1.3), this.gold, 70, 5);
+      this.audio.play('coin');
+      // The gold comes out in three spurts, like a fountain.
+      const third = Math.ceil(coins / 3);
+      for (let i = 0; i < 3; i++) this.later(i * 0.22, () => this.dropCoins(spill, Math.min(third, coins - third * i)));
+      if (crystal) this.later(0.9, () => this.dropCrystal(beside));
+      else if (reward === 'potion') this.later(0.8, () => this.dropPotion(beside));
+    });
+  }
+
+  /** A beaten skeleton falls apart: its body goes and loose bones fly away from the blow. */
+  private scatterBones(e: Enemy): void {
+    e.root.visible = false;
+    const hero = this.hero.position;
+    const away = this.tmp.copy(e.position).sub(hero).setY(0);
+    if (away.lengthSq() < 1e-4) away.set(Math.sin(this.hero.facing), 0, Math.cos(this.hero.facing));
+    away.normalize();
+    const side = new THREE.Vector3(-away.z, 0, away.x);
+    const size = e.def.scale * (e.def.kind === 'king' ? 1.5 : 1);
+    const parts: [string, number, number][] = [['hw_skull', 0.5, 1.5], ['hw_ribcage', 0.55, 1.0], ['hw_bone_A', 0.6, 0.9], ['hw_bone_A', 0.6, 0.6], ['hw_bone_A', 0.55, 1.2], ['hw_bone_A', 0.5, 0.4]];
+    for (const [name, scale, height] of parts) {
+      const object = this.assets.piece(name);
+      object.scale.setScalar(scale * size);
+      object.position.copy(e.position).setY(height * size);
+      object.rotation.set(Math.random() * 6, Math.random() * 6, Math.random() * 6);
+      object.traverse((o) => (o.castShadow = true));
+      this.scene.add(object);
+      const speed = 2.6 + Math.random() * 2.4;
+      const velocity = away.clone().multiplyScalar(speed).addScaledVector(side, (Math.random() - 0.5) * 3.2).setY(3 + Math.random() * 2.5);
+      this.bones.push({ object, velocity, spin: new THREE.Vector3((Math.random() - 0.5) * 14, (Math.random() - 0.5) * 14, (Math.random() - 0.5) * 14), age: 0, rest: 0.12 * scale * size });
     }
-    this.floatAt(chest.position, 2, 'Treasure!', 'crit');
+  }
+
+  /** The colour of the power on the weapon, or null with none. */
+  private elementColor(): THREE.Color | null {
+    const el = heldElement(this.blessings);
+    return el === 'fire' ? this.fireColor : el === 'frost' ? this.frostColor : el === 'spark' ? this.sparkColor : null;
+  }
+
+  /**
+   * Gold Spark: a beaten monster throws a spark at the nearest one that is up, in view and
+   * not behind a wall. A spark that beats its monster jumps again, one more jump per level.
+   */
+  private launchSpark(from: Enemy): void {
+    const lvl = this.lvl('spark');
+    if (!lvl || this.sparkDepth > lvl) return;
+    const at = from.position.clone().setY(1.1 * from.def.scale);
+    let best: Enemy | null = null;
+    let bestD = 10;
+    for (const o of this.enemies) {
+      if (o === from || !o.alive || o.summoning || o.state === 'rising') continue;
+      const d = o.position.distanceTo(from.position);
+      if (d >= bestD || !this.onScreen(o.position) || this.wallBetween(from.position, o.position)) continue;
+      best = o;
+      bestD = d;
+    }
+    this.burst(at, this.sparkColor, 12, 3.5);
+    if (!best) return;
+    this.sparks.push({ pos: at, target: best, depth: this.sparkDepth + 1, life: 1.5 });
+    this.audio.play('zap');
+  }
+
+  private updateSparks(dt: number): void {
+    if (!this.sparks.length) return;
+    const keep: typeof this.sparks = [];
+    const aim = new THREE.Vector3();
+    for (const s of this.sparks) {
+      s.life -= dt;
+      const t = s.target;
+      if (!t.alive || s.life <= 0) {
+        this.burst(s.pos, this.sparkColor, 6, 2);
+        continue;
+      }
+      aim.copy(t.position).setY(1.1 * t.def.scale).sub(s.pos);
+      const d = aim.length();
+      const step = 15 * dt;
+      if (d <= step + 0.4) {
+        this.sparkDepth = s.depth;
+        // A spark goes past a raised shield: a spark that fizzled on one would look like nothing happened.
+        const dealt = t.hurt(14 + 8 * this.lvl('spark'), s.pos, 1.2, true);
+        if (dealt > 0) {
+          this.floatAt(t.position, t.def.scale * 2.2, String(dealt), 'crit');
+          this.burst(t.position.clone().setY(1.1 * t.def.scale), this.sparkColor, 18, 4);
+          this.audio.play('zap');
+          if (!t.alive) this.onEnemyDied(t);
+        }
+        this.sparkDepth = 0;
+        continue;
+      }
+      s.pos.addScaledVector(aim, step / d);
+      for (let i = 0; i < 2; i++) {
+        this.glow.spawn({ x: s.pos.x + (Math.random() - 0.5) * 0.12, y: s.pos.y + (Math.random() - 0.5) * 0.12, z: s.pos.z + (Math.random() - 0.5) * 0.12, life: 0.28, size: i ? 0.2 : 0.12, sizeEnd: 0.02, color: this.sparkColor, intensity: 5 });
+      }
+      keep.push(s);
+    }
+    this.sparks = keep;
+  }
+
+  /**
+   * Finds the weapon in the hand and on the hero and gives each its own material, so the
+   * power's colour can sit on it. Called when the power, the hero or the view is rebuilt.
+   */
+  private clearElementLook(): void {
+    for (const g of this.weaponGlow) {
+      g.mat.emissive.copy(g.base);
+      g.mat.emissiveIntensity = g.baseI;
+    }
+    this.weaponGlow = [];
+  }
+
+  private applyElementLook(): void {
+    this.clearElementLook();
+    if (!heldElement(this.blessings) || !this.hero) return;
+    const WEAPON = /^(1H_Sword|2H_Sword|Knife|Knife_Offhand|1H_Wand|2H_Staff|staff|Skeleton_Staff)$/;
+    const seen = new Set<THREE.Mesh>();
+    const take = (root: THREE.Object3D | null | undefined, hand: boolean): void => {
+      root?.traverse((o) => {
+        if (!(o instanceof THREE.Mesh) || !(o.material instanceof THREE.MeshStandardMaterial) || seen.has(o)) return;
+        seen.add(o);
+        if (!o.material.userData.elementOwn) this.hero.ownMaterial(o);
+        const mat = o.material as THREE.MeshStandardMaterial;
+        if (!o.geometry.boundingBox) o.geometry.computeBoundingBox();
+        this.weaponGlow.push({ mesh: o, mat, base: mat.emissive.clone(), baseI: mat.emissiveIntensity, hand });
+      });
+    };
+    this.hero.model.traverse((o) => {
+      if (WEAPON.test(o.name)) take(o, false);
+    });
+    take(this.viewmodel?.right, true);
+  }
+
+  /** The weapon glows in its power's colour and sheds a few sparks, so you can see what you hold. */
+  private updateElementLook(dt: number): void {
+    const color = this.elementColor();
+    if (!color || !this.weaponGlow.length) return;
+    const el = heldElement(this.blessings)!;
+    const pulse = 0.34 + 0.1 * Math.sin(this.time * 4.2);
+    for (const g of this.weaponGlow) {
+      g.mat.emissive.copy(this.weaponTint[el]);
+      g.mat.emissiveIntensity = pulse;
+    }
+    if (this.phase !== 'play' || Math.random() > dt * 7) return;
+    const first = this.firstPerson;
+    // No sparks from a weapon that is faded out with the hero.
+    if (!first && this.heroFade < 0.5) return;
+    const shown = this.weaponGlow.filter((g) => {
+      if (g.hand !== first) return false;
+      for (let p: THREE.Object3D | null = g.mesh; p; p = p.parent) if (!p.visible) return false;
+      return true;
+    });
+    const g = shown[Math.floor(Math.random() * shown.length)];
+    if (!g) return;
+    const box = g.mesh.geometry.boundingBox!;
+    const at = new THREE.Vector3(THREE.MathUtils.lerp(box.min.x, box.max.x, Math.random()), THREE.MathUtils.lerp(box.min.y, box.max.y, Math.random()), THREE.MathUtils.lerp(box.min.z, box.max.z, Math.random()));
+    g.mesh.localToWorld(at);
+    // Smaller in the hand: it is an arm's length from the eye.
+    const k = first ? 0.35 : 1;
+    if (el === 'fire') this.glow.spawn({ x: at.x, y: at.y, z: at.z, vy: (0.8 + Math.random() * 0.6) * k, life: 0.5, size: 0.1 * k, sizeEnd: 0.01, color, intensity: 4 });
+    else if (el === 'frost') this.glow.spawn({ x: at.x, y: at.y, z: at.z, vy: -0.45 * k, vx: (Math.random() - 0.5) * 0.2 * k, life: 0.7, size: 0.07 * k, sizeEnd: 0.01, color, intensity: 3 });
+    else this.glow.spawn({ x: at.x, y: at.y, z: at.z, vx: (Math.random() - 0.5) * 1.4 * k, vy: (Math.random() - 0.2) * 1.4 * k, vz: (Math.random() - 0.5) * 1.4 * k, life: 0.24, size: 0.11 * k, sizeEnd: 0.01, color, intensity: 5 });
+  }
+
+  private updateBones(dt: number): void {
+    this.bones = this.bones.filter((b) => {
+      b.age += dt;
+      const p = b.object.position;
+      if (b.age < 2.4) {
+        b.velocity.y -= 18 * dt;
+        p.addScaledVector(b.velocity, dt);
+        if (p.y < b.rest) {
+          p.y = b.rest;
+          const hard = Math.abs(b.velocity.y) > 1.2;
+          b.velocity.y = hard ? Math.abs(b.velocity.y) * 0.38 : 0;
+          b.velocity.x *= 0.55;
+          b.velocity.z *= 0.55;
+          b.spin.multiplyScalar(hard ? 0.5 : 0);
+        }
+        this.crypt.colliders.resolve(p, 0.2);
+        b.object.rotation.x += b.spin.x * dt;
+        b.object.rotation.y += b.spin.y * dt;
+        b.object.rotation.z += b.spin.z * dt;
+      } else p.y -= dt * 0.5;
+      if (b.age < 3.4) return true;
+      this.scene.remove(b.object);
+      return false;
+    });
   }
 
   /** Coins spill out, bounce, then fly to the hero when close (no chasing them around). */
@@ -3559,7 +3825,7 @@ export class Game {
       this.coinStreak += got;
       this.coinStreakTimer = 0.7;
       this.burst(this.hero.position.clone().setY(1.1), this.gold, 6 * got, 2.2);
-      this.tip('coins', 'Coins! Spend them at the <b>merchant</b> who comes after each hall.');
+      this.tip('coins', 'Coins! Spend them at the <b>merchant</b>.');
     }
   }
 
@@ -3669,7 +3935,7 @@ export class Game {
     const trap = this.crypt.hazards.find((h) => Math.abs(p.x - h.x) < h.half && Math.abs(p.z - h.z) < h.half);
     if (!trap) return;
     this.hazardCooldown = 0.8;
-    this.tip('spikes', 'Ouch! Watch out for spike traps on the floor.');
+    this.tip('spikes', 'Ouch! Mind the spikes.');
     this.damageHero(8 * Math.max(0.5, this.difficulty.enemyDamage), new THREE.Vector3(trap.x, 0, trap.z));
   }
 
@@ -3689,6 +3955,7 @@ export class Game {
     hero.powerRecharge = Math.max(0.3, 1 - 0.25 * this.lvl('surge'));
     hero.maxHp = hero.def.maxHp + 30 * this.lvl('heart') + this.bonusHp;
     hero.hp = Math.min(hero.hp, hero.maxHp);
+    this.applyElementLook();
   }
 
   private offerPaths(): void {
@@ -3781,6 +4048,9 @@ export class Game {
     // One tip at a time, well apart, and never over a blow that is about to land.
     if (this.time - this.lastTipAt < 20) return;
     if (this.enemies.some((e) => e.alive && (e.state === 'windup' || e.state === 'charge'))) return;
+    // Teaching tips wait until no monster is close; the ones about a fight still show in it.
+    const fightTip = id === 'dodge' || id === 'charge' || id === 'boss' || id === 'enraged' || id === 'dazed' || id === 'shield' || id === 'attack' || id === 'potion';
+    if (!fightTip && this.nearestEnemy(this.hero.position, 6)) return;
     this.tipsShown.add(id);
     this.lastTipAt = this.time;
     this.ui.hint(html, seconds);
@@ -4425,7 +4695,7 @@ export class Game {
           pk.bumped = true;
           this.audio.play('block');
           this.floatAt(pk.base, 1.4, 'Bag full', 'info');
-          this.tip('bag-full', 'Your potion bag is full. Drink one with <kbd>H</kbd> to make room.', 3);
+          this.tip('bag-full', 'Bag full. Drink with <kbd>H</kbd>.', 3);
         }
         return true;
       }

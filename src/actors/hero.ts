@@ -71,7 +71,7 @@ export class Hero extends Character {
     this.radius = 0.6;
     this.cooldowns = def.abilities.map(() => 0);
     this.hideParts(def.hide);
-    for (const { item, hand, flip, tilt } of def.hold) this.hold(assets.weapon(item), hand, flip, tilt);
+    for (const { item, hand, flip, tilt } of def.hold) this.hold(assets.weapon(item), hand, flip, tilt, true);
     this.animator.play('Idle');
   }
 

@@ -93,7 +93,8 @@ const fragmentShader = /* glsl */ `
     float speed = mix( 1.0, 2.6, uAwake );
     float awakeWave = pow( max( 0.0, sin( uTime * 3.2 * speed - vPhase * 0.7 ) ), 6.0 ) * uAwake;
     vec3 color = mix( uColor, uColorAwake, uAwake );
-    float strength = uIntensity * ( breathe + wave * 1.6 + awakeWave * 2.2 );
+    // Carved and faint until the pillar wakes; then they light and run.
+    float strength = uIntensity * mix( 0.22, 1.0, uAwake ) * ( breathe + wave * 1.6 * uAwake + awakeWave * 2.2 );
     gl_FragColor = vec4( color * glyph * strength, glyph );
   }
 `;

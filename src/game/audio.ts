@@ -26,6 +26,9 @@ export type Sfx =
   | 'start'
   | 'coin'
   | 'chest'
+  | 'freeze'
+  | 'thaw'
+  | 'zap'
   | 'step';
 
 export class Audio {
@@ -211,8 +214,11 @@ export class Audio {
       case 'swing':
         return this.whoosh(now, 0.16, 900, 2600, 0.18);
       case 'hit':
-        this.thud(now, 150, 0.12, 0.5);
-        return this.whoosh(now, 0.06, 2500, 1200, 0.18);
+        // A body you can hear on small speakers (above 200 Hz) plus a bone crack, over the low thump.
+        this.thud(now, 150, 0.12, 0.4);
+        this.tone(now, [460, 230], 0.09, 'triangle', 0.3);
+        this.click(now + 0.01, 1700);
+        return this.whoosh(now, 0.06, 2500, 1200, 0.16);
       case 'crit':
         this.thud(now, 110, 0.2, 0.7);
         return this.tone(now, [880, 1320], 0.18, 'triangle', 0.18);
@@ -222,7 +228,9 @@ export class Audio {
         this.thud(now, 90, 0.18, 0.55);
         return this.tone(now, [320, 180], 0.16, 'sawtooth', 0.08);
       case 'bones':
-        for (let i = 0; i < 5; i++) this.click(now + i * 0.045 + Math.random() * 0.02, 1400 + Math.random() * 1500);
+        // A skeleton falling apart: a knock, then bones clattering down over half a second.
+        this.tone(now, [380, 190], 0.1, 'triangle', 0.22);
+        for (let i = 0; i < 9; i++) this.click(now + 0.03 + i * 0.055 + Math.random() * 0.03, 900 + Math.random() * 1900);
         return;
       case 'cast':
         return this.tone(now, [520, 1040], 0.22, 'sine', 0.12);
@@ -261,6 +269,20 @@ export class Audio {
       case 'chest':
         this.thud(now, 120, 0.25, 0.4);
         return this.arp(now + 0.1, [659, 784, 988, 1319, 1568], 0.07, 0.14, 0.7);
+      case 'freeze':
+        // Ice closing: a glassy ping falling over a soft hiss.
+        this.tone(now, [2400, 1500], 0.16, 'sine', 0.14);
+        this.tone(now + 0.03, [3200, 2600], 0.1, 'triangle', 0.07);
+        return this.whoosh(now, 0.14, 5200, 2600, 0.07);
+      case 'thaw':
+        // Ice breaking: a few bright cracks.
+        for (let i = 0; i < 4; i++) this.click(now + i * 0.03 + Math.random() * 0.02, 2600 + Math.random() * 1800);
+        return;
+      case 'zap':
+        // A spark jumping: a quick rising chirp with a snap on the end.
+        this.tone(now, [700, 2100], 0.09, 'square', 0.07);
+        this.tone(now + 0.02, [1400, 2800], 0.07, 'triangle', 0.1);
+        return this.click(now + 0.09, 3000);
       case 'tick':
         return this.tone(now, [1500 + Math.random() * 200, 1600], 0.03, 'sine', 0.025);
       case 'start':
@@ -277,7 +299,14 @@ export class Audio {
     this.ctx = new Ctor();
     this.master = this.ctx.createGain();
     this.master.gain.value = this.muted ? 0 : 0.5;
-    this.master.connect(this.ctx.destination);
+    // A limiter, so stacked hits and clatter never clip.
+    const limiter = this.ctx.createDynamicsCompressor();
+    limiter.threshold.value = -8;
+    limiter.knee.value = 6;
+    limiter.ratio.value = 12;
+    limiter.attack.value = 0.003;
+    limiter.release.value = 0.12;
+    this.master.connect(limiter).connect(this.ctx.destination);
     const length = this.ctx.sampleRate;
     this.noise = this.ctx.createBuffer(1, length, this.ctx.sampleRate);
     const data = this.noise.getChannelData(0);

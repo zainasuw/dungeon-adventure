@@ -410,7 +410,6 @@ export class Ui {
         <h2 id="go-title" class="card__title">${escapeHtml(stats.heroName || `The ${stats.hero.name}`)} fell in ${hall}</h2>
         <p class="card__text">${stats.pillars ? `Don't give up! You keep your ${stats.pillars} ${stats.pillars === 1 ? 'pillar' : 'pillars'}. Try this hall again, full of health.` : 'Don\'t give up! Try this hall again, full of health.'}${stats.lostCoins ? ` Your ${stats.lostCoins} coins lie where you fell.` : ''}</p>
         ${this.pillarRow(stats.pillars)}
-        ${stats.seed ? `<p class="card__seed">Dungeon ${stats.seed} · <button type="button" class="link-btn link-btn--inline" data-act="replay">Play this dungeon again</button></p>` : ''}
         <p class="card__tip">${['Tip: when a red ring appears under a skeleton, press <kbd>Space</kbd> to dodge out of it.', 'Tip: drink a potion with <kbd>H</kbd> when your health gets low.', 'Tip: Easy mode has gentler monsters and more potions.', 'Tip: hold <kbd>F</kbd> to keep swinging at a monster.'][Math.floor(Math.random() * 4)]}</p>
         <div class="stack">
           <button class="btn btn--primary" data-act="retry">Try again</button>
@@ -420,7 +419,6 @@ export class Ui {
       </div>`,
     );
     this.on('retry', () => this.handlers.restartLevel(), 700);
-    this.on('replay', () => this.handlers.replaySeed());
     this.on('hero', () => this.handlers.changeHero());
     this.on('quit', () => this.handlers.backToTitle());
     this.focusFirst();
@@ -439,7 +437,6 @@ export class Ui {
           ${stat('Time', formatTime(stats.time))}
           ${stat('Skeletons beaten', String(stats.kills))}
         </div>
-        ${stats.seed ? `<p class="card__seed">Dungeon ${stats.seed} · <button type="button" class="link-btn link-btn--inline" data-act="replay">Play this dungeon again</button></p>` : ''}
         <div class="stack stack--row">
           <button class="btn btn--primary" data-act="again">Play again</button>
           <button class="btn" data-act="quit">Back to title</button>
@@ -447,7 +444,6 @@ export class Ui {
       </div>`,
     );
     this.on('again', () => this.handlers.changeHero(), 1200);
-    this.on('replay', () => this.handlers.replaySeed(), 1200);
     this.on('quit', () => this.handlers.backToTitle(), 1200);
     this.focusFirst();
   }
@@ -471,8 +467,7 @@ export class Ui {
     this.setScreen(
       'bless',
       `<div class="bless-wrap" role="dialog" aria-modal="true" aria-labelledby="bless-title" tabindex="-1">
-        <h2 id="bless-title" class="card__title card__title--big">Choose a blessing</h2>
-        <p class="card__sub">A gift from the pillar. Pick one to keep for the rest of your quest.</p>
+        <h2 id="bless-title" class="card__title card__title--big">${options.every((b) => b.element) ? 'Choose your power' : 'Choose a blessing'}</h2>
         <div class="bless-row">${cards}</div>
         <p class="bless-help">Click one, or press <kbd>1</kbd> <kbd>2</kbd> <kbd>3</kbd></p>
       </div>`,
@@ -742,7 +737,7 @@ export class Ui {
       this.hintEl.classList.remove('hint--on');
       return;
     }
-    this.hintEl.innerHTML = this.forTouch(html);
+    this.hintEl.innerHTML = `<span class="hint__text">${this.forTouch(html)}</span>`;
     this.hintEl.classList.add('hint--on');
     this.hintTimer = window.setTimeout(() => this.hintEl.classList.remove('hint--on'), seconds * 1000);
   }
@@ -981,7 +976,7 @@ export class Ui {
 
   private pillarRow(lit: number): string {
     return `<div class="pillar-row">${PILLARS.map(
-      (p, i) => `<span class="pip pip--big ${i < lit ? 'pip--lit' : ''}" style="--pip:${p.color}">${icon(PILLAR_PATH)}<small>${p.name}</small></span>`,
+      (p, i) => `<span class="pip pip--big ${i < lit ? 'pip--lit' : ''}" style="--pip:${p.color}">${icon(PILLAR_PATH)}</span>`,
     ).join('')}</div>`;
   }
 

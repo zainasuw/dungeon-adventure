@@ -105,7 +105,7 @@ export const ENEMIES: Record<EnemyKind, EnemyDef> = {
     hitAt: 0.55,
     block: 0,
     weapons: [{ item: 'Skeleton_Axe', hand: 'right' }],
-    eyes: '#c77dff',
+    eyes: '#b6ffb0',
   },
   charger: {
     kind: 'charger',
@@ -141,7 +141,7 @@ export const ENEMIES: Record<EnemyKind, EnemyDef> = {
     block: 0,
     ranged: { keepAway: 7, projectileSpeed: 8.5 },
     weapons: [{ item: 'Skeleton_Staff', hand: 'right', flip: true, tilt: -0.6 }],
-    eyes: '#c77dff',
+    eyes: '#ff7a2a',
   },
 };
 
@@ -176,6 +176,14 @@ export class Enemy extends Character {
   burn = 0;
   burnDps = 0;
   burnTick = 0;
+  /** Frost Strike: seconds left held still in ice. */
+  frozen = 0;
+  /** Seconds after a thaw during which it cannot be frozen again, so nothing is held for good. */
+  private frostGuard = 0;
+  /** Seconds left moving slowly (the King is chilled, never held). */
+  chill = 0;
+  /** Set for one frame when the ice breaks, so the game can show it. */
+  thawed = false;
   /** A tougher, glowing champion: bigger, more health, always drops a reward. */
   elite = false;
   /** Which way it slides around obstacles: 1 or -1. */
@@ -271,6 +279,8 @@ export class Enemy extends Character {
    * - wake: standing in place, shakes awake (the King, sleepers found in the open);
    * - walk: already on its feet out of sight, walks in slowly and speeds up.
    */
+  /** The colour of a monster held in ice. */
+  static readonly ICE = '#9fdcff';
   static readonly TELL = 0.8;
   static readonly RISE = 2.2;
   /** Depth the body starts at, in model units (the rig is ~2 m tall at scale 1). */
@@ -341,10 +351,42 @@ export class Enemy extends Character {
     return this.stateTime < 0.3;
   }
 
-  /** Applies a hit. Returns the damage dealt, 0 if blocked, -1 if it can't be hurt right now. */
-  hurt(amount: number, from: THREE.Vector3, knockback: number): number {
+  /**
+   * Frost Strike. Holds the monster still in its pose for `seconds`, tinted ice blue.
+   * The King is too big to hold and is slowed instead. Returns true if it froze or chilled.
+   */
+  freeze(seconds: number): boolean {
+    if (!this.alive || this.state === 'rising' || this.state === 'dormant') return false;
+    if (this.def.kind === 'king') {
+      this.chill = 1.6;
+      this.tint(Enemy.ICE, 0.45);
+      return true;
+    }
+    if (this.frozen > 0 || this.frostGuard > 0) return false;
+    this.frozen = seconds;
+    this.state = 'hurt';
+    this.stateTime = 0;
+    this.telegraph = 0;
+    this.stun = seconds;
+    this.velocity.set(0, 0, 0);
+    this.knock.set(0, 0, 0);
+    this.animator.mixer.timeScale = 0;
+    this.tint(Enemy.ICE, 1);
+    return true;
+  }
+
+  private thaw(): void {
+    this.frozen = 0;
+    this.frostGuard = 2.2;
+    this.animator.mixer.timeScale = 1;
+    this.tint(Enemy.ICE, 0);
+    this.thawed = true;
+  }
+
+  /** Applies a hit. Returns the damage dealt, 0 if blocked, -1 if it can't be hurt right now. `pierce` goes past a raised shield. */
+  hurt(amount: number, from: THREE.Vector3, knockback: number, pierce = false): number {
     if (!this.alive || this.summoning) return -1;
-    if (this.def.block > 0 && this.guardUp(from)) {
+    if (!pierce && this.def.block > 0 && this.guardUp(from)) {
       this.flash('#9fd8ff', 0.12);
       this.blocksInRow++;
       if (this.blocksInRow >= 3) {
@@ -366,11 +408,19 @@ export class Enemy extends Character {
     this.knock.copy(this.position).sub(from).setY(0);
     if (this.knock.lengthSq() > 0.0001) this.knock.normalize().multiplyScalar(knockback / Math.sqrt(this.def.scale));
     if (this.hp === 0) {
+      if (this.frozen > 0) this.thaw();
+      this.chill = 0;
+      this.tint(Enemy.ICE, 0);
       this.alive = false;
       this.state = 'dead';
       this.stateTime = 0;
       this.telegraph = 0;
       this.animator.play(Math.random() < 0.5 ? 'Death_A' : 'Death_C_Skeletons', { loop: false, fade: 0.08, restart: true });
+      return amount;
+    }
+    if (this.frozen > 0) {
+      // Held in ice: the blow lands but it neither slides nor flinches.
+      this.knock.set(0, 0, 0);
       return amount;
     }
     // Heavy hits interrupt light enemies; the Brute only flinches.
@@ -403,6 +453,15 @@ export class Enemy extends Character {
     this.warnCtx = ctx;
     this.stateTime += dt;
     this.cooldown -= dt;
+    if (this.frostGuard > 0) this.frostGuard -= dt;
+    if (this.chill > 0) {
+      this.chill -= dt;
+      if (this.chill <= 0) this.tint(Enemy.ICE, 0);
+    }
+    if (this.frozen > 0) {
+      this.frozen -= dt;
+      if (this.frozen <= 0) this.thaw();
+    }
     // Knockback slides out over a few frames.
     this.position.addScaledVector(this.knock, dt * 8);
     this.knock.multiplyScalar(Math.exp(-10 * dt));
@@ -534,7 +593,7 @@ export class Enemy extends Character {
     }
 
     if (this.wake < 1) this.wake = Math.min(1, this.wake + dt / 3.5);
-    const speed = def.speed * this.speedBoost * this.wake;
+    const speed = def.speed * this.speedBoost * this.wake * (this.chill > 0 ? 0.6 : 1);
     this.velocity.x = damp(this.velocity.x, this.steer.x * speed, 8, dt);
     this.velocity.z = damp(this.velocity.z, this.steer.z * speed, 8, dt);
     this.position.addScaledVector(this.velocity, dt);
